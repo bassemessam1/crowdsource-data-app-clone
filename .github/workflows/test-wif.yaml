@@ -1,6 +1,7 @@
 ---
 name: Test Workload Identity Federation
 
+
 "on":
   workflow_dispatch:     # Manual trigger only — for testing
 
