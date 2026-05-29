@@ -1,0 +1,44 @@
+name: Test Workload Identity Federation
+
+on:
+  workflow_dispatch:   # Manual trigger only — for testing
+
+jobs:
+  test-gcp-auth:
+    runs-on: ubuntu-latest
+
+    # CRITICAL: These permissions are required for WIF to work.
+    # id-token: write  — allows the job to request an OIDC token from GitHub
+    # contents: read   — allows the job to checkout the repository
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # This step does the full WIF exchange:
+      # 1. Requests OIDC token from GitHub
+      # 2. Sends it to GCP STS
+      # 3. GCP verifies it matches the pool/provider config
+      # 4. GCP issues a short-lived access token for sa-terraform
+      - name: Authenticate to GCP via Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      # If this succeeds, WIF is working correctly
+      - name: List GCS buckets (proves GCP auth worked)
+        run: |
+          gcloud storage buckets list --project=${{ secrets.GCP_PROJECT_ID }}
+          echo "WIF authentication successful!"
+
+      - name: Print token info
+        run: |
+          gcloud auth print-access-token | cut -c1-20
+          echo "... (truncated for security)"

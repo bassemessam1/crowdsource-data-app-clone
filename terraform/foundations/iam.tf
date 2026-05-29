@@ -122,3 +122,9 @@ resource "google_project_iam_member" "terraform_security_admin" {
   role    = "roles/iam.securityAdmin"
   member  = "serviceAccount:${google_service_account.terraform.email}"
 }
+
+resource "google_project_iam_member" "terraform_wif_admin" {
+  project = var.project_id
+  role    = "roles/iam.workloadIdentityPoolAdmin"
+  member  = "serviceAccount:${google_service_account.terraform.email}"
+}

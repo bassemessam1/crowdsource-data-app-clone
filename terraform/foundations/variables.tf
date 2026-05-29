@@ -52,3 +52,8 @@ variable "services_cidr" {
   type        = string
   default     = "10.0.16.0/20"
 }
+
+variable "github_owner" {
+  description = "GitHub username or organisation that owns the repository"
+  type        = string
+}
