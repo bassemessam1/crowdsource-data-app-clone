@@ -37,5 +37,5 @@ resource "google_service_account_iam_member" "github_terraform_wi" {
   role               = "roles/iam.workloadIdentityUser"
 
   # principalSet matches any GitHub token with this repository attribute
-  member = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_owner}/opensignal-gcp-clone"
+  member = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_owner}/crowdsource-data-app-clone"
 }

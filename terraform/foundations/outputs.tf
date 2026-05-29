@@ -64,7 +64,7 @@ output "workload_identity_provider" {
 }
 
 output "terraform_sa_email" {
-  description = "Terraform servive account email - Used in GitHub Actions workflow"
+  description = "Terraform service account email - Used in GitHub Actions workflow"
   value = "sa-terraform@{var.project_id}.iam.gserviceaccount.com"
   
 }
