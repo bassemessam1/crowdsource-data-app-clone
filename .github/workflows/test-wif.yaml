@@ -1,7 +1,9 @@
+---
 name: Test Workload Identity Federation
 
-on:
-  workflow_dispatch:   # Manual trigger only — for testing
+
+"on":
+  workflow_dispatch:     # Manual trigger only — for testing
 
 jobs:
   test-gcp-auth:
