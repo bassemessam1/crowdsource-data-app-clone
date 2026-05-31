@@ -1,0 +1,85 @@
+# ── GKE Autopilot — Fully kube-system free ───────────────────────────────────
+
+# ── Grafana ───────────────────────────────────────────────────────────────────
+grafana:
+  adminPassword: "crowdsource-dev-2026"
+  persistence:
+    enabled: true
+    size: 5Gi
+  defaultDashboardsEnabled: true
+
+# ── Prometheus ────────────────────────────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+# ── AlertManager ──────────────────────────────────────────────────────────────
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+# ── Prometheus Operator ───────────────────────────────────────────────────────
+# This is the key fix — override the kubelet-service argument
+# that the operator passes to itself, which creates a Service
+# in kube-system even when kubelet scraping is disabled.
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+  # Override the kubelet service to point to monitoring namespace
+  # instead of kube-system — this is what was creating the forbidden Service
+  kubeletService:
+    enabled: false
+  # Remove kube-system from the namespaces the operator watches
+  namespaces:
+    releaseNamespace: true
+    additional:
+      - monitoring
+      - kafka
+      - spark
+      - airflow
+      - ingest-api
+      - cert-manager
+      - external-secrets
+
+# ── Disable ALL kube-system touching components ───────────────────────────────
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubelet:
+  enabled: false
+nodeExporter:
+  enabled: false
+coreDns:
+  enabled: false
+kubeDns:
+  enabled: false
+
+# ── Keep these — run in monitoring namespace only ─────────────────────────────
+kube-state-metrics:
+  enabled: true
