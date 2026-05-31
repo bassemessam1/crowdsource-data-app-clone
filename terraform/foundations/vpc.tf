@@ -95,3 +95,42 @@ resource "google_compute_address" "ingest_api" {
   project     = var.project_id
   #description = "Static external IP for the Ingest API load balancer"
 }
+
+# ── Cloud Router ──────────────────────────────────────────────────────────────
+# Cloud Router is required by Cloud NAT.
+# It advertises routes and manages the NAT configuration.
+resource "google_compute_router" "router" {
+  name    = "crowdsource-data-app-router"
+  network = google_compute_network.vpc.name
+  region  = var.region
+  project = var.project_id
+
+  bgp {
+    asn = 64514
+  }
+}
+
+# ── Cloud NAT ─────────────────────────────────────────────────────────────────
+# Allows private GKE nodes (no public IPs) to initiate outbound
+# connections to the internet — for pulling container images from
+# quay.io, docker.io, ghcr.io, and other external registries.
+# Inbound connections are still blocked — NAT is outbound only.
+resource "google_compute_router_nat" "nat" {
+  name                               = "crowdsource-data-app-nat"
+  router                             = google_compute_router.router.name
+  region                             = var.region
+  project                            = var.project_id
+
+  # AUTO_ONLY = GCP manages the external IPs for NAT automatically
+  # No need to reserve static IPs for NAT
+  nat_ip_allocate_option             = "AUTO_ONLY"
+
+  # Apply NAT to ALL subnets in the VPC — covers our GKE subnet
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+
+  # Log only errors — reduces log noise and cost
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
+}
