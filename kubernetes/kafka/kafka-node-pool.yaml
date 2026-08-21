@@ -1,0 +1,35 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role               # Pool name — brokers + controllers combined
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: crowdsource-data-app-kafka   # Must match Kafka resource name
+spec:
+  # Combined mode: each node is both a broker AND a controller
+  # Correct for dev clusters with 3 nodes
+  roles:
+    - broker
+    - controller
+
+  replicas: 3                   # 3 nodes: kafka-dual-role-0/1/2
+
+  storage:
+    type: persistent-claim
+    size: 20Gi
+    class: standard-rwo
+    deleteClaim: false          # Keep disks if pods are deleted
+
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+      ephemeral-storage: 1Gi
+    limits:
+      memory: 2Gi
+      cpu: "1"
+      ephemeral-storage: 2Gi
+
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 1024m
