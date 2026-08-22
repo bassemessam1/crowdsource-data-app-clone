@@ -1,0 +1,42 @@
+# ── Topic 1: raw-measurements ─────────────────────────────────────────────────
+# Primary ingest topic — all valid measurement events land here
+# Consumed by: Kafka Connect (GCS Sink) + Spark Streaming
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: raw-measurements
+  namespace: kafka
+  labels:
+    # Must exactly match your Kafka cluster name
+    strimzi.io/cluster: crowdsource-data-app-kafka
+spec:
+  partitions: 6          # 6 parallel consumer threads max
+  replicas: 3            # Copy on every broker
+  config:
+    # 3 days retention — Spark processes within hours
+    retention.ms: "259200000"
+    cleanup.policy: delete
+    # Write succeeds only if 2 brokers confirm
+    min.insync.replicas: "2"
+    # Max message size — 1MB is enough for one measurement event
+    max.message.bytes: "1048576"
+
+---
+# ── Topic 2: raw-measurements-dlq ────────────────────────────────────────────
+# Dead Letter Queue — invalid or malformed events routed here
+# Consumed by: manual investigation + alerting
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: raw-measurements-dlq
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: crowdsource-data-app-kafka
+spec:
+  partitions: 1          # Low volume — no parallelism needed
+  replicas: 3            # Same durability as main topic
+  config:
+    # 7 days retention — more time to investigate failures
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"

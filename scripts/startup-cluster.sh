@@ -175,6 +175,44 @@ helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stac
 
 ok "Prometheus + Grafana installed"
 echo ""
+# ── Phase 02: Kafka Cluster ───────────────────────────────────────────────────
+log "Phase 02: Deploying Kafka cluster..."
+
+KAFKA_DIR="$REPO_ROOT/kubernetes/kafka"
+
+if [ -f "$KAFKA_DIR/kafka-cluster.yaml" ]; then
+
+  # Delete any orphaned PVCs from previous sessions
+  kubectl delete pvc --all -n kafka 2>/dev/null || true
+  sleep 5
+
+  # Apply in correct order
+  kubectl apply -f "$KAFKA_DIR/kafka-metrics-config.yaml"
+  kubectl apply -f "$KAFKA_DIR/kafka-node-pool.yaml"
+
+  log "  Waiting 30s for KafkaNodePool to register..."
+  sleep 30
+
+  kubectl apply -f "$KAFKA_DIR/kafka-cluster.yaml"
+
+  log "  Waiting for Kafka brokers (up to 10 minutes)..."
+  kubectl wait kafka --all \
+    --for=condition=Ready \
+    --timeout=600s \
+    -n kafka 2>/dev/null || \
+    warn "Kafka not ready within timeout — check: kubectl get pods -n kafka"
+
+  ok "Kafka cluster deployed"
+
+  # Apply topics
+  if [ -f "$KAFKA_DIR/kafka-topics.yaml" ]; then
+    kubectl apply -f "$KAFKA_DIR/kafka-topics.yaml"
+    ok "Kafka topics applied"
+  fi
+
+else
+  warn "No Kafka manifests found at $KAFKA_DIR — skipping"
+fi
 
 # ── Final verification ────────────────────────────────────────────────────────
 log "Running final verification..."

@@ -104,6 +104,27 @@ if [ -z "$SKIP_K8S" ]; then
   ok "Resources cleaned up"
 fi
 
+log "Removing Kafka cluster resources..."
+
+# Delete Kafka CRD resources — entity operator cleans up internally
+kubectl delete kafka --all -n kafka \
+  --timeout=60s 2>/dev/null || true
+
+kubectl delete kafkanodepool --all -n kafka \
+  --timeout=60s 2>/dev/null || true
+
+kubectl delete kafkatopic --all -n kafka \
+  --timeout=30s 2>/dev/null || true
+
+# Wait for pods to terminate
+sleep 15
+
+# Delete PVCs — these are GCP Persistent Disks that bill even when cluster is down
+kubectl delete pvc --all -n kafka \
+  --timeout=60s 2>/dev/null || true
+
+ok "Kafka resources removed"
+
 # ── Step 4: Terraform destroy GKE module ─────────────────────────────────────
 log "Step 4/5 — Destroying GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"
