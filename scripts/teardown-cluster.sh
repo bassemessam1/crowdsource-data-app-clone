@@ -104,26 +104,95 @@ if [ -z "$SKIP_K8S" ]; then
   ok "Resources cleaned up"
 fi
 
+# log "Removing Kafka cluster resources..."
+
+# # Delete Kafka CRD resources — entity operator cleans up internally
+# kubectl delete kafka --all -n kafka \
+#   --timeout=60s 2>/dev/null || true
+
+# kubectl delete kafkanodepool --all -n kafka \
+#   --timeout=60s 2>/dev/null || true
+
+# kubectl delete kafkatopic --all -n kafka \
+#   --timeout=30s 2>/dev/null || true
+
+# # Wait for pods to terminate
+# sleep 15
+
+# # Delete PVCs — these are GCP Persistent Disks that bill even when cluster is down
+# kubectl delete pvc --all -n kafka \
+#   --timeout=60s 2>/dev/null || true
+
+# ── Phase 02: Remove Kafka resources (with finalizer cleanup) ─────────────────
 log "Removing Kafka cluster resources..."
 
-# Delete Kafka CRD resources — entity operator cleans up internally
-kubectl delete kafka --all -n kafka \
-  --timeout=60s 2>/dev/null || true
-
-kubectl delete kafkanodepool --all -n kafka \
-  --timeout=60s 2>/dev/null || true
-
+# Step A — delete topics first (least dependencies)
 kubectl delete kafkatopic --all -n kafka \
   --timeout=30s 2>/dev/null || true
 
-# Wait for pods to terminate
-sleep 15
+# Step B — remove topic finalizers if still stuck
+kubectl get kafkatopic -n kafka -o name 2>/dev/null | \
+  while read name; do
+    kubectl patch $name -n kafka \
+      --type='json' \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+      2>/dev/null || true
+  done
 
-# Delete PVCs — these are GCP Persistent Disks that bill even when cluster is down
+# Step C — delete Kafka cluster and node pool
+kubectl delete kafka --all -n kafka \
+  --timeout=60s 2>/dev/null || true
+kubectl delete kafkanodepool --all -n kafka \
+  --timeout=60s 2>/dev/null || true
+
+# Step D — remove Kafka finalizers if still stuck
+kubectl get kafka -n kafka -o name 2>/dev/null | \
+  while read name; do
+    kubectl patch $name -n kafka \
+      --type='json' \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+      2>/dev/null || true
+  done
+
+kubectl get kafkanodepool -n kafka -o name 2>/dev/null | \
+  while read name; do
+    kubectl patch $name -n kafka \
+      --type='json' \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+      2>/dev/null || true
+  done
+
+# Step E — delete PVCs
 kubectl delete pvc --all -n kafka \
   --timeout=60s 2>/dev/null || true
 
+# Step F — wait for pods to terminate
+log "  Waiting for Kafka pods to terminate..."
+kubectl wait pod --all \
+  --for=delete \
+  --timeout=120s \
+  -n kafka 2>/dev/null || true
+
+# Step G — remove schema registry
+kubectl delete deployment schema-registry -n kafka \
+  2>/dev/null || true
+kubectl delete service schema-registry -n kafka \
+  2>/dev/null || true
+
+# Step H — verify namespace is clean before Terraform destroys it
+REMAINING=$(kubectl get all -n kafka 2>/dev/null | \
+  grep -v "^NAME\|strimzi-cluster-operator" | wc -l)
+
+if [ "$REMAINING" -gt "0" ]; then
+  warn "Some resources remain in kafka namespace — forcing namespace cleanup"
+  kubectl patch namespace kafka \
+    --type='json' \
+    -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+    2>/dev/null || true
+fi
+
 ok "Kafka resources removed"
+
 
 # ── Step 4: Terraform destroy GKE module ─────────────────────────────────────
 log "Step 4/5 — Destroying GKE cluster via Terraform..."
