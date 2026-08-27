@@ -103,3 +103,29 @@ resource "google_service_account_iam_member" "dbt_wi" {
 
   depends_on = [time_sleep.wait_for_wi_pool]
 }
+
+
+# ── Ingest API SA in kafka namespace ─────────────────────────────────────────
+# Kafka Connect runs in the kafka namespace but needs GCS write access
+# via sa-ingest-api. A separate K8s SA must exist in the kafka namespace
+# because pods can only reference ServiceAccounts in their own namespace.
+resource "kubernetes_service_account" "ingest_api_kafka" {
+  metadata {
+    name      = "ksa-ingest-api"
+    namespace = "kafka"
+    annotations = {
+      "iam.gke.io/gcp-service-account" = "sa-ingest-api@${var.project_id}.iam.gserviceaccount.com"
+    }
+  }
+  depends_on = [
+    kubernetes_namespace.namespaces,
+    time_sleep.wait_for_wi_pool
+  ]
+}
+
+resource "google_service_account_iam_member" "ingest_api_kafka_wi" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/sa-ingest-api@${var.project_id}.iam.gserviceaccount.com"
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[kafka/ksa-ingest-api]"
+  depends_on         = [time_sleep.wait_for_wi_pool]
+}
