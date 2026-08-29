@@ -12,6 +12,8 @@
 #   - Kafka cluster + topics (Phase 02)
 #   - Schema Registry (Phase 02)
 #   - Kafka Connect + GCS Sink connector (Phase 02)
+#   - FastAPI Ingest API (Phase 02)
+#   - Measurement Simulator (Phase 02)
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -179,8 +181,13 @@ helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stac
 ok "Prometheus + Grafana installed"
 echo ""
 
-kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-sa.yaml"
-ok "ksa-ingest-api serviceAccount created in kafka namespace"
+# ── Phase 02: ksa-ingest-api in kafka namespace ───────────────────────────────
+# Kafka Connect runs in kafka namespace and needs this SA for GCS access
+if [ -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-sa.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-sa.yaml"
+  ok "ksa-ingest-api ServiceAccount created in kafka namespace"
+fi
+echo ""
 
 # ── Phase 02: Kafka cluster ───────────────────────────────────────────────────
 log "Phase 02 — Deploying Kafka cluster..."
@@ -248,9 +255,32 @@ log "Phase 02 — Deploying Kafka Connect..."
 KC_MANIFEST="$REPO_ROOT/kubernetes/kafka-connect/kafka-connect.yaml"
 
 if [ -f "$KC_MANIFEST" ]; then
+
+  # Recreate gcs-credentials secret — destroyed with cluster each session
+  log "  Recreating gcs-credentials secret..."
+  kubectl delete secret gcs-credentials -n kafka 2>/dev/null || true
+  if gcloud secrets versions access latest \
+    --secret=kafka-connect-gcs-key \
+    --project=$PROJECT_ID \
+    > /tmp/gcs-key.json 2>/dev/null; then
+    kubectl create secret generic gcs-credentials \
+      --from-file=key.json=/tmp/gcs-key.json \
+      -n kafka
+    rm -f /tmp/gcs-key.json
+    ok "gcs-credentials secret created"
+  else
+    warn "kafka-connect-gcs-key not found in Secret Manager — Kafka Connect may fail"
+    rm -f /tmp/gcs-key.json
+  fi
+
+  # Remove any leftover KafkaConnect CRDs from previous sessions
+  # These trigger unwanted Kaniko build jobs that fail on GKE Autopilot
+  kubectl delete kafkaconnect --all -n kafka 2>/dev/null || true
+  sleep 5
+
   kubectl apply -f "$KC_MANIFEST"
 
-  log "  Waiting for Kafka Connect (init container installs GCS plugin — up to 10 minutes)..."
+  log "  Waiting for Kafka Connect (up to 10 minutes)..."
   kubectl wait deployment/kafka-connect \
     --for=condition=Available \
     --timeout=600s \
@@ -259,6 +289,8 @@ if [ -f "$KC_MANIFEST" ]; then
     warn "Kafka Connect not ready — check: kubectl get pods -n kafka"
 
   # Re-register the GCS Sink connector via REST API
+  # Uses confluent.topic.bootstrap.servers and gcs.credentials.path
+  # which are required by the Confluent Platform image
   log "  Registering GCS Sink Connector..."
   sleep 15
 
@@ -270,13 +302,83 @@ if [ -f "$KC_MANIFEST" ]; then
     -- sh -c \
     'curl -s -X POST http://kafka-connect:8083/connectors \
       -H "Content-Type: application/json" \
-      -d "{\"name\":\"gcs-sink-raw-measurements\",\"config\":{\"connector.class\":\"io.confluent.connect.gcs.GcsSinkConnector\",\"tasks.max\":\"3\",\"topics\":\"raw-measurements\",\"gcs.bucket.name\":\"crowdsource-data-app-clone-landing\",\"gcs.part.size\":\"5242880\",\"flush.size\":\"1000\",\"rotate.interval.ms\":\"300000\",\"storage.class\":\"io.confluent.connect.gcs.storage.GcsStorage\",\"format.class\":\"io.confluent.connect.gcs.format.avro.AvroFormat\",\"path.format\":\"year=YYYY/month=MM/day=dd/hour=HH\",\"locale\":\"en_GB\",\"timezone\":\"UTC\",\"timestamp.extractor\":\"RecordField\",\"timestamp.field\":\"timestamp\",\"schema.compatibility\":\"BACKWARD\",\"value.converter\":\"io.confluent.connect.avro.AvroConverter\",\"value.converter.schema.registry.url\":\"http://schema-registry:8081\",\"key.converter\":\"org.apache.kafka.connect.storage.StringConverter\",\"errors.tolerance\":\"all\",\"errors.deadletterqueue.topic.name\":\"raw-measurements-dlq\",\"errors.deadletterqueue.topic.replication.factor\":\"3\"}}" \
-    2>/dev/null' 2>/dev/null && \
+      -d @- << ENDJSON
+{
+  "name": "gcs-sink-raw-measurements",
+  "config": {
+    "connector.class": "io.confluent.connect.gcs.GcsSinkConnector",
+    "tasks.max": "1",
+    "topics": "raw-measurements",
+    "gcs.bucket.name": "crowdsource-data-app-clone-landing",
+    "gcs.part.size": "5242880",
+    "flush.size": "1000",
+    "rotate.interval.ms": "300000",
+    "storage.class": "io.confluent.connect.gcs.storage.GcsStorage",
+    "format.class": "io.confluent.connect.gcs.format.avro.AvroFormat",
+    "path.format": "year=YYYY/month=MM/day=dd/hour=HH",
+    "locale": "en_GB",
+    "timezone": "UTC",
+    "timestamp.extractor": "RecordField",
+    "timestamp.field": "timestamp",
+    "schema.compatibility": "BACKWARD",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "errors.tolerance": "all",
+    "errors.deadletterqueue.topic.name": "raw-measurements-dlq",
+    "errors.deadletterqueue.topic.replication.factor": "3",
+    "confluent.topic.bootstrap.servers": "crowdsource-data-app-kafka-kafka-bootstrap:9092",
+    "confluent.topic.replication.factor": "3",
+    "gcs.credentials.path": "/etc/gcs-credentials/key.json"
+  }
+}
+ENDJSON
+' 2>/dev/null && \
     ok "GCS Sink Connector registered" || \
     warn "Connector registration failed — register manually after startup"
 
 else
   warn "No Kafka Connect manifest found — skipping"
+fi
+echo ""
+
+# ── Phase 02: Ingest API ──────────────────────────────────────────────────────
+log "Phase 02 — Deploying Ingest API..."
+
+INGEST_MANIFEST="$REPO_ROOT/kubernetes/ingest-api/ingest-api.yaml"
+
+if [ -f "$INGEST_MANIFEST" ]; then
+  kubectl apply -f "$INGEST_MANIFEST"
+
+  log "  Waiting for Ingest API to be ready (up to 5 minutes)..."
+  kubectl wait deployment/ingest-api \
+    --for=condition=Available \
+    --timeout=300s \
+    -n ingest-api 2>/dev/null && \
+    ok "Ingest API ready" || \
+    warn "Ingest API not ready — check: kubectl get pods -n ingest-api"
+else
+  warn "No Ingest API manifest found — skipping"
+fi
+echo ""
+
+# ── Phase 02: Measurement Simulator ──────────────────────────────────────────
+log "Phase 02 — Deploying Measurement Simulator..."
+
+SIM_MANIFEST="$REPO_ROOT/kubernetes/simulator/simulator.yaml"
+
+if [ -f "$SIM_MANIFEST" ]; then
+  kubectl apply -f "$SIM_MANIFEST"
+
+  log "  Waiting for Simulator to be ready (up to 3 minutes)..."
+  kubectl wait deployment/measurement-simulator \
+    --for=condition=Available \
+    --timeout=180s \
+    -n ingest-api 2>/dev/null && \
+    ok "Simulator ready" || \
+    warn "Simulator not ready — check: kubectl get pods -n ingest-api"
+else
+  warn "No Simulator manifest found — skipping"
 fi
 echo ""
 
@@ -307,9 +409,14 @@ echo -e "  ${GREEN}✓${NC}  Workload Identity active"
 echo -e "  ${GREEN}✓${NC}  Kafka cluster + topics deployed"
 echo -e "  ${GREEN}✓${NC}  Schema Registry running"
 echo -e "  ${GREEN}✓${NC}  Kafka Connect + GCS Sink running"
+echo -e "  ${GREEN}✓${NC}  Ingest API running (static IP: 34.89.87.57)"
+echo -e "  ${GREEN}✓${NC}  Measurement Simulator running"
 echo ""
 echo -e "  ${YELLOW}Access Grafana:${NC}"
 echo -e "  kubectl port-forward svc/\$(kubectl get svc -n monitoring --selector=app.kubernetes.io/name=grafana -o name | head -1 | cut -d/ -f2) 3000:80 -n monitoring"
+echo ""
+echo -e "  ${YELLOW}Test Ingest API:${NC}"
+echo -e "  curl -s http://34.89.87.57/health"
 echo ""
 echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
