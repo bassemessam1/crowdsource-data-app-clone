@@ -69,8 +69,22 @@ gcloud container clusters get-credentials $CLUSTER_NAME \
 if [ -z "$SKIP_K8S" ]; then
   ok "Connected to $CLUSTER_NAME"
 
-  # ── Step 2: Phase 02 — Remove Kafka Connect ───────────────────────────────
+  # ── Step 2: Phase 02 — Remove application workloads ──────────────────────
   log "Step 2/5 — Removing Phase 02 resources..."
+
+  # Remove Simulator first (stops new events being generated)
+  kubectl delete deployment measurement-simulator -n ingest-api \
+    --timeout=60s 2>/dev/null || true
+  ok "Simulator removed"
+
+  # Remove Ingest API (stops accepting new events)
+  kubectl delete deployment ingest-api -n ingest-api \
+    --timeout=60s 2>/dev/null || true
+  kubectl delete service ingest-api -n ingest-api \
+    --timeout=30s 2>/dev/null || true
+  kubectl delete service ingest-api-lb -n ingest-api \
+    --timeout=30s 2>/dev/null || true
+  ok "Ingest API removed"
 
   # Delete GCS Sink connector via REST API before killing the pod
   kubectl run connector-delete \
@@ -88,6 +102,9 @@ if [ -z "$SKIP_K8S" ]; then
   kubectl delete service kafka-connect -n kafka \
     --timeout=30s 2>/dev/null || true
   kubectl delete configmap kafka-connect-startup -n kafka \
+    2>/dev/null || true
+  # Delete gcs-credentials secret
+  kubectl delete secret gcs-credentials -n kafka \
     2>/dev/null || true
   ok "Kafka Connect removed"
 
@@ -212,6 +229,7 @@ echo -e "  ${GREEN}✓${NC}  GCS data preserved"
 echo -e "  ${GREEN}✓${NC}  BigQuery data preserved"
 echo -e "  ${GREEN}✓${NC}  Terraform state preserved"
 echo -e "  ${GREEN}✓${NC}  IAM + VPC preserved"
+echo -e "  ${GREEN}✓${NC}  Artifact Registry images preserved"
 echo ""
 echo -e "  ${YELLOW}→${NC}  Run ${BLUE}bash scripts/startup-cluster.sh${NC} to resume tomorrow"
 echo ""
