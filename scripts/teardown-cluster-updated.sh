@@ -192,7 +192,7 @@ if [ -z "$SKIP_K8S" ]; then
   done
 
 fi
-
+kubectl delete secret gcs-credentials -n kafka 2>/dev/null || true
 # ── Step 5: Terraform destroy GKE module ─────────────────────────────────────
 log "Step 5/5 — Destroying GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"

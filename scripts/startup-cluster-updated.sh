@@ -248,6 +248,20 @@ log "Phase 02 — Deploying Kafka Connect..."
 KC_MANIFEST="$REPO_ROOT/kubernetes/kafka-connect/kafka-connect.yaml"
 
 if [ -f "$KC_MANIFEST" ]; then
+
+log "  Recreating gcs-credentials secret..."
+kubectl delete secret gcs-credentials -n kafka 2>/dev/null || true
+gcloud secrets versions access latest \
+  --secret=kafka-connect-gcs-key \
+  --project=crowdsource-data-app-clone \
+  > /tmp/gcs-key.json 2>/dev/null && \
+kubectl create secret generic gcs-credentials \
+  --from-file=key.json=/tmp/gcs-key.json \
+  -n kafka && \
+rm -f /tmp/gcs-key.json && \
+ok "gcs-credentials secret created" || \
+warn "Could not create gcs-credentials — Kafka Connect may fail to start"
+
   kubectl apply -f "$KC_MANIFEST"
 
   log "  Waiting for Kafka Connect (init container installs GCS plugin — up to 10 minutes)..."
