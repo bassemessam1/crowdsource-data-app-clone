@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ksa-ingest-api
+  namespace: kafka
+  annotations:
+    iam.gke.io/gcp-service-account: sa-ingest-api@crowdsource-data-app-clone.iam.gserviceaccount.com

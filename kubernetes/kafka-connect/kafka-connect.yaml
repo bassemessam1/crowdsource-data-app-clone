@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-connect
+  namespace: kafka
+  labels:
+    app: kafka-connect
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-connect
+  template:
+    metadata:
+      labels:
+        app: kafka-connect
+    spec:
+      serviceAccountName: ksa-ingest-api
+      enableServiceLinks: false
+      containers:
+        - name: kafka-connect
+          # Custom image with GCS plugin pre-installed — no init container needed
+          image: europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/kafka-connect-gcs:7.6.0
+          ports:
+            - containerPort: 8083
+          volumeMounts:
+            - name: gcs-credentials
+              mountPath: /etc/gcs-credentials
+              readOnly: true
+          env:
+            - name: CONNECT_BOOTSTRAP_SERVERS
+              value: "crowdsource-data-app-kafka-kafka-bootstrap:9092"
+            - name: CONNECT_REST_PORT
+              value: "8083"
+            - name: CONNECT_GROUP_ID
+              value: "opensignal-connect-cluster"
+            - name: CONNECT_CONFIG_STORAGE_TOPIC
+              value: "connect-configs"
+            - name: CONNECT_OFFSET_STORAGE_TOPIC
+              value: "connect-offsets"
+            - name: CONNECT_STATUS_STORAGE_TOPIC
+              value: "connect-status"
+            - name: CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR
+              value: "3"
+            - name: CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR
+              value: "3"
+            - name: CONNECT_STATUS_STORAGE_REPLICATION_FACTOR
+              value: "3"
+            - name: CONNECT_KEY_CONVERTER
+              value: "org.apache.kafka.connect.storage.StringConverter"
+            - name: CONNECT_VALUE_CONVERTER
+              value: "io.confluent.connect.avro.AvroConverter"
+            - name: CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL
+              value: "http://schema-registry:8081"
+            - name: CONNECT_INTERNAL_KEY_CONVERTER
+              value: "org.apache.kafka.connect.json.JsonConverter"
+            - name: CONNECT_INTERNAL_VALUE_CONVERTER
+              value: "org.apache.kafka.connect.json.JsonConverter"
+            - name: CONNECT_REST_ADVERTISED_HOST_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CONNECT_PLUGIN_PATH
+              value: "/usr/share/java,/usr/share/confluent-hub-components"
+            - name: CONNECT_LOG4J_ROOT_LOGLEVEL
+              value: "INFO"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/etc/gcs-credentials/key.json"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+              ephemeral-storage: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /connectors
+              port: 8083
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /connectors
+              port: 8083
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 5
+            timeoutSeconds: 10
+      volumes:
+        - name: gcs-credentials
+          secret:
+            secretName: gcs-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-connect
+  namespace: kafka
+  labels:
+    app: kafka-connect
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8083
+      targetPort: 8083
+      name: rest
+  selector:
+    app: kafka-connect

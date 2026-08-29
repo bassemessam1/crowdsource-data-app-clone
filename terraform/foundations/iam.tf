@@ -39,7 +39,7 @@ resource "google_service_account" "terraform" {
 
 resource "google_project_iam_member" "ingest_api_gcs_writer" {
   project = var.project_id
-  role    = "roles/storage.objectCreator"
+  role    = "roles/storage.objectAdmin"
   member  = "serviceAccount:${google_service_account.ingest_api.email}"
 }
 
