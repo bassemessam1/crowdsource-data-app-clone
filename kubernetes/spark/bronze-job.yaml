@@ -1,0 +1,38 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: bronze-measurements
+  namespace: spark
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  sparkVersion: "3.5.1"
+  image: europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark:3.5.1
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/spark/jobs/bronze_job.py
+
+  sparkConf:
+    spark.app.landing: "gs://crowdsource-data-app-clone-landing"
+    spark.app.bronze:  "gs://crowdsource-data-app-clone-bronze"
+    # GCS connector
+    spark.hadoop.google.cloud.auth.service.account.enable: "true"
+    spark.hadoop.fs.gs.impl: "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
+    #spark.jars.packages: "org.apache.spark:spark-avro_2.12:3.5.1"
+
+  driver:
+    cores: 1
+    memory: "1g"
+    serviceAccount: ksa-spark
+    labels:
+      version: "3.5.1"
+
+  executor:
+    cores: 2
+    instances: 2
+    memory: "2g"
+    labels:
+      version: "3.5.1"
+
+  restartPolicy:
+    type: Never

@@ -1,0 +1,32 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: silver-measurements
+  namespace: spark
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  sparkVersion: "3.5.1"
+  image: europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark:3.5.1
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/spark/jobs/silver_job.py
+
+  sparkConf:
+    spark.app.bronze: "gs://crowdsource-data-app-clone-bronze"
+    spark.app.silver: "gs://crowdsource-data-app-clone-silver"
+    spark.hadoop.google.cloud.auth.service.account.enable: "true"
+    spark.hadoop.fs.gs.impl: "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
+
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: ksa-spark
+
+  executor:
+    cores: 2
+    instances: 2
+    memory: "3g"
+
+  restartPolicy:
+    type: Never
