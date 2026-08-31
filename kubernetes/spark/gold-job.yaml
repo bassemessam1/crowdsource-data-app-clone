@@ -1,0 +1,34 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: gold-operator-metrics
+  namespace: spark
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  sparkVersion: "3.5.1"
+  image: europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark:3.5.1
+  imagePullPolicy: Always
+  mainApplicationFile: local:///opt/spark/jobs/gold_job.py
+
+  sparkConf:
+    spark.app.silver:     "gs://crowdsource-data-app-clone-silver"
+    spark.app.gold:       "gs://crowdsource-data-app-clone-gold"
+    spark.app.bq_project: "crowdsource-data-app-clone"
+    spark.app.bq_dataset: "crowdsource_data_app_gold"
+    spark.hadoop.google.cloud.auth.service.account.enable: "true"
+    spark.hadoop.fs.gs.impl: "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
+
+  driver:
+    cores: 1
+    memory: "2g"
+    serviceAccount: ksa-spark
+
+  executor:
+    cores: 2
+    instances: 2
+    memory: "4g"
+
+  restartPolicy:
+    type: Never
