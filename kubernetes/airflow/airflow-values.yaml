@@ -82,7 +82,7 @@ dags:
     rev: HEAD
     depth: 1
     maxFailures: 3
-    subPath: dags
+    subPath: airflow/dags
     period: 60s
     containerName: git-sync
     resources:
