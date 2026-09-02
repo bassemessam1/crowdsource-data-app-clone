@@ -37,7 +37,7 @@ def spark_spec(name, job_file, driver_memory="1g", executor_memory="2g"):
                 "spark.app.silver":  "gs://crowdsource-data-app-clone-silver",
                 "spark.app.gold":    "gs://crowdsource-data-app-clone-gold",
                 "spark.app.bq_project": "crowdsource-data-app-clone",
-                "spark.app.bq_dataset": "opensignal_gold",
+                "spark.app.bq_dataset": "crowdsource_data_app_gold",
                 "spark.hadoop.google.cloud.auth.service.account.enable": "true",
                 "spark.hadoop.fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
             },
