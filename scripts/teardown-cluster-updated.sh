@@ -19,6 +19,7 @@
 #   - Kafka topic data in broker PVCs
 #   - GCS Sink connector config (re-registered by startup script)
 #   - SparkApplication resources (re-run by startup script)
+#   - Airflow pods and DAG run history (DAG code preserved in GitHub)
 #
 # Usage: bash scripts/teardown-cluster.sh
 
@@ -70,8 +71,25 @@ gcloud container clusters get-credentials $CLUSTER_NAME \
 if [ -z "$SKIP_K8S" ]; then
   ok "Connected to $CLUSTER_NAME"
 
-  # ── Step 2: Phase 03 — Remove Spark jobs ─────────────────────────────────
-  log "Step 2/5 — Removing Phase 03 and Phase 02 resources..."
+  # ── Step 2: Phase 04 — Remove Airflow ────────────────────────────────────
+  log "Step 2/5 — Removing Phase 04, Phase 03 and Phase 02 resources..."
+
+  # Uninstall Airflow first — stops DAG scheduler before removing Spark jobs
+  # DAG run history is lost but DAG code is preserved in GitHub
+  if helm list -n airflow 2>/dev/null | grep -q "airflow"; then
+    helm uninstall airflow -n airflow \
+      --timeout 5m 2>/dev/null && \
+      ok "Airflow uninstalled" || \
+      warn "Could not uninstall Airflow — continuing"
+  else
+    warn "Airflow not found — skipping"
+  fi
+
+  # Delete Airflow PVC (built-in Postgres data) — not needed between sessions
+  kubectl delete pvc --all -n airflow \
+    --timeout=60s 2>/dev/null || true
+
+  # ── Phase 03 — Remove Spark jobs ─────────────────────────────────────────
 
   # Delete all SparkApplications first — this cancels running jobs
   # and removes driver/executor pods cleanly
@@ -207,6 +225,7 @@ if [ -z "$SKIP_K8S" ]; then
   log "Step 4/5 — Uninstalling Helm releases..."
 
   # Order matters:
+  # - airflow already uninstalled above (before Spark)
   # - spark-operator before Strimzi (no CRD finalizer dependency between them)
   # - Strimzi LAST — it processes Kafka CRD finalizers during deletion
   #   Removing it first leaves Kafka namespaces stuck Terminating forever
@@ -237,7 +256,7 @@ log "Step 5/5 — Destroying GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"
 
 terraform destroy -auto-approve
-ok "GKE cluster destroyed"
+ok "GKE cluster destroyed"export GOOGLE_APPLICATION_CREDENTIALS='/home/bassem/github/crowdsource-data-app-clone/gcp-keys/crowdsource-data-app-key.json'
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -246,6 +265,7 @@ echo -e "${GREEN}║           TEARDOWN COMPLETE              ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster destroyed — billing stopped"
+echo -e "  ${GREEN}✓${NC}  Airflow uninstalled (DAG code preserved in GitHub)"
 echo -e "  ${GREEN}✓${NC}  Spark jobs cancelled and pods removed"
 echo -e "  ${GREEN}✓${NC}  Kafka PVCs deleted — no orphaned disks"
 echo -e "  ${GREEN}✓${NC}  GCS data preserved (landing/bronze/silver/gold)"

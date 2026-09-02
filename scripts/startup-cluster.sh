@@ -14,6 +14,9 @@
 #   - Kafka Connect + GCS Sink connector (Phase 02)
 #   - FastAPI Ingest API (Phase 02)
 #   - Measurement Simulator (Phase 02)
+#   - Spark Operator (Phase 03)
+#   - Bronze / Silver / Gold Spark jobs (Phase 03)
+#   - Airflow 2.9.2 with built-in Postgres (Phase 04)
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -64,7 +67,7 @@ helm version --short &>/dev/null || \
 ok "Helm installed: $(helm version --short)"
 
 # Check Helm repos are configured
-REQUIRED_REPOS="jetstack external-secrets strimzi prometheus-community"
+REQUIRED_REPOS="jetstack external-secrets strimzi prometheus-community spark-operator apache-airflow"
 for repo in $REQUIRED_REPOS; do
   helm repo list 2>/dev/null | grep -q "$repo" || {
     warn "Helm repo '$repo' missing — adding..."
@@ -73,6 +76,8 @@ for repo in $REQUIRED_REPOS; do
       external-secrets)     helm repo add external-secrets https://charts.external-secrets.io ;;
       strimzi)              helm repo add strimzi https://strimzi.io/charts/ ;;
       prometheus-community) helm repo add prometheus-community https://prometheus-community.github.io/helm-charts ;;
+      spark-operator)       helm repo add spark-operator https://kubeflow.github.io/spark-operator ;;
+      apache-airflow)       helm repo add apache-airflow https://airflow.apache.org ;;
     esac
     ok "Added $repo repo"
   }
@@ -83,7 +88,7 @@ ok "Helm repos up to date"
 echo ""
 
 # ── Step 1: Terraform — recreate GKE cluster ─────────────────────────────────
-log "Step 1/7 — Recreating GKE cluster via Terraform..."
+log "Step 1/8 — Recreating GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"
 
 terraform init -reconfigure > /dev/null 2>&1
@@ -93,7 +98,7 @@ ok "GKE cluster created"
 echo ""
 
 # ── Step 2: Connect kubectl ───────────────────────────────────────────────────
-log "Step 2/7 — Connecting kubectl to cluster..."
+log "Step 2/8 — Connecting kubectl to cluster..."
 gcloud container clusters get-credentials $CLUSTER_NAME \
   --region $REGION \
   --project $PROJECT_ID
@@ -110,7 +115,7 @@ ok "kubectl connected"
 echo ""
 
 # ── Step 3: Verify namespaces ─────────────────────────────────────────────────
-log "Step 3/7 — Verifying namespaces..."
+log "Step 3/8 — Verifying namespaces..."
 REQUIRED_NS="kafka spark airflow ingest-api monitoring"
 for ns in $REQUIRED_NS; do
   kubectl get namespace $ns &>/dev/null && \
@@ -120,7 +125,7 @@ done
 echo ""
 
 # ── Step 4: Install cert-manager ─────────────────────────────────────────────
-log "Step 4/7 — Installing cert-manager..."
+log "Step 4/8 — Installing cert-manager..."
 helm upgrade --install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --create-namespace \
@@ -135,7 +140,7 @@ ok "cert-manager installed"
 echo ""
 
 # ── Step 5: Install External Secrets Operator ────────────────────────────────
-log "Step 5/7 — Installing External Secrets Operator..."
+log "Step 5/8 — Installing External Secrets Operator..."
 helm upgrade --install external-secrets external-secrets/external-secrets \
   --namespace external-secrets \
   --create-namespace \
@@ -155,7 +160,7 @@ fi
 echo ""
 
 # ── Step 6: Install Strimzi ───────────────────────────────────────────────────
-log "Step 6/7 — Installing Strimzi Kafka Operator..."
+log "Step 6/8 — Installing Strimzi Kafka Operator..."
 helm upgrade --install strimzi-operator strimzi/strimzi-kafka-operator \
   --namespace kafka \
   --version 0.51.0 \
@@ -168,7 +173,7 @@ ok "Strimzi operator installed"
 echo ""
 
 # ── Step 7: Install Prometheus + Grafana ─────────────────────────────────────
-log "Step 7/7 — Installing Prometheus + Grafana..."
+log "Step 7/8 — Installing Prometheus + Grafana..."
 helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
   --create-namespace \
@@ -179,6 +184,24 @@ helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stac
   --wait
 
 ok "Prometheus + Grafana installed"
+echo ""
+
+# ── Step 8: Install Spark Operator ───────────────────────────────────────────
+log "Step 8/8 — Installing Spark Operator..."
+helm upgrade --install spark-operator \
+  spark-operator/spark-operator \
+  --namespace spark \
+  --version 1.1.27 \
+  --set sparkJobNamespace=spark \
+  --set serviceAccounts.spark.name=ksa-spark \
+  --set serviceAccounts.spark.create=false \
+  --set serviceAccounts.sparkoperator.create=true \
+  --set webhook.enable=false \
+  --cleanup-on-fail \
+  --timeout 10m \
+  --wait
+
+ok "Spark Operator installed"
 echo ""
 
 # ── Phase 02: ksa-ingest-api in kafka namespace ───────────────────────────────
@@ -382,6 +405,87 @@ else
 fi
 echo ""
 
+# ── Phase 03: Spark Bronze / Silver / Gold jobs ───────────────────────────────
+log "Phase 03 — Running Spark data lake jobs..."
+
+SPARK_DIR="$REPO_ROOT/kubernetes/spark"
+
+if [ -f "$SPARK_DIR/bronze-job.yaml" ]; then
+
+  # Clean up any leftover SparkApplications from previous sessions
+  kubectl delete sparkapplication --all -n spark 2>/dev/null || true
+  sleep 5
+
+  # Bronze job — landing Avro → bronze Parquet
+  log "  Running Bronze job (landing → bronze)..."
+  kubectl apply -f "$SPARK_DIR/bronze-job.yaml"
+
+  log "  Waiting for Bronze job to complete (up to 15 minutes)..."
+  kubectl wait sparkapplication/bronze-measurements \
+    --for=jsonpath='{.status.applicationState.state}'=COMPLETED \
+    --timeout=900s \
+    -n spark 2>/dev/null && \
+    ok "Bronze job completed" || \
+    warn "Bronze job did not complete — check: kubectl get sparkapplication -n spark"
+
+  # Silver job — bronze Parquet → silver (dedup + enrichment)
+  log "  Running Silver job (bronze → silver)..."
+  kubectl apply -f "$SPARK_DIR/silver-job.yaml"
+
+  log "  Waiting for Silver job to complete (up to 15 minutes)..."
+  kubectl wait sparkapplication/silver-measurements \
+    --for=jsonpath='{.status.applicationState.state}'=COMPLETED \
+    --timeout=900s \
+    -n spark 2>/dev/null && \
+    ok "Silver job completed" || \
+    warn "Silver job did not complete — check: kubectl get sparkapplication -n spark"
+
+  # Gold job — silver → aggregated metrics + BigQuery load
+  log "  Running Gold job (silver → gold + BigQuery)..."
+  kubectl apply -f "$SPARK_DIR/gold-job.yaml"
+
+  log "  Waiting for Gold job to complete (up to 15 minutes)..."
+  kubectl wait sparkapplication/gold-operator-metrics \
+    --for=jsonpath='{.status.applicationState.state}'=COMPLETED \
+    --timeout=900s \
+    -n spark 2>/dev/null && \
+    ok "Gold job completed — BigQuery loaded" || \
+    warn "Gold job did not complete — check: kubectl get sparkapplication -n spark"
+
+else
+  warn "No Spark job manifests found at $SPARK_DIR — skipping"
+fi
+echo ""
+
+# ── Phase 04: Airflow ────────────────────────────────────────────────────────
+log "Phase 04 — Deploying Airflow..."
+
+AIRFLOW_VALUES="$REPO_ROOT/kubernetes/airflow/airflow-values.yaml"
+
+if [ -f "$AIRFLOW_VALUES" ]; then
+  helm upgrade --install airflow apache-airflow/airflow \
+    --namespace airflow \
+    --version 1.13.1 \
+    --values "$AIRFLOW_VALUES" \
+    --cleanup-on-fail \
+    --timeout 20m \
+    --wait 2>/dev/null && \
+    ok "Airflow installed" || \
+    warn "Airflow install failed — check: kubectl get pods -n airflow"
+
+  log "  Waiting for Airflow webserver to be ready (up to 10 minutes)..."
+  kubectl wait deployment/airflow-webserver \
+    --for=condition=Available \
+    --timeout=600s \
+    -n airflow 2>/dev/null && \
+    ok "Airflow webserver ready" || \
+    warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
+else
+  warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
+  warn "Create it at: kubernetes/airflow/airflow-values.yaml"
+fi
+echo ""
+
 # ── Final verification ────────────────────────────────────────────────────────
 log "Running final verification..."
 echo ""
@@ -404,19 +508,28 @@ echo -e "${GREEN}║         STARTUP COMPLETE                 ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster running"
-echo -e "  ${GREEN}✓${NC}  All 4 operators installed"
+echo -e "  ${GREEN}✓${NC}  All 5 operators installed (Spark + Airflow)"
 echo -e "  ${GREEN}✓${NC}  Workload Identity active"
 echo -e "  ${GREEN}✓${NC}  Kafka cluster + topics deployed"
 echo -e "  ${GREEN}✓${NC}  Schema Registry running"
 echo -e "  ${GREEN}✓${NC}  Kafka Connect + GCS Sink running"
 echo -e "  ${GREEN}✓${NC}  Ingest API running (static IP: 34.89.87.57)"
 echo -e "  ${GREEN}✓${NC}  Measurement Simulator running"
+echo -e "  ${GREEN}✓${NC}  Spark Bronze / Silver / Gold jobs run"
+echo -e "  ${GREEN}✓${NC}  Airflow running (built-in Postgres)"
 echo ""
 echo -e "  ${YELLOW}Access Grafana:${NC}"
 echo -e "  kubectl port-forward svc/\$(kubectl get svc -n monitoring --selector=app.kubernetes.io/name=grafana -o name | head -1 | cut -d/ -f2) 3000:80 -n monitoring"
 echo ""
 echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
+echo ""
+echo -e "  ${YELLOW}Check BigQuery:${NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo ""
+echo -e "  ${YELLOW}Access Airflow UI:${NC}"
+echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
+echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
 echo ""
 echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
