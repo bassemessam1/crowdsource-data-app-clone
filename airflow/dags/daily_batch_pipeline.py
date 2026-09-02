@@ -1,6 +1,6 @@
 """
 Daily Batch Pipeline DAG
-Runs the Bronze → Silver → Gold Spark jobs in sequence.
+Runs Bronze → Silver → Gold Spark jobs in sequence using inline specs.
 Scheduled hourly — each run processes all available landing data.
 """
 from datetime import datetime, timedelta
@@ -12,7 +12,52 @@ from airflow.providers.cncf.kubernetes.sensors.spark_kubernetes import (
     SparkKubernetesSensor,
 )
 
-# ── Default args ──────────────────────────────────────────────────────────────
+REPO = "europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark:3.5.1"
+
+def spark_spec(name, job_file, driver_memory="1g", executor_memory="2g"):
+    """Build a SparkApplication spec dict for the given job."""
+    return {
+        "apiVersion": "sparkoperator.k8s.io/v1beta2",
+        "kind": "SparkApplication",
+        "metadata": {
+            "name": name,
+            "namespace": "spark",
+        },
+        "spec": {
+            "type": "Python",
+            "pythonVersion": "3",
+            "mode": "cluster",
+            "sparkVersion": "3.5.1",
+            "image": REPO,
+            "imagePullPolicy": "Always",
+            "mainApplicationFile": f"local:///opt/spark/jobs/{job_file}",
+            "sparkConf": {
+                "spark.app.landing": "gs://crowdsource-data-app-clone-landing",
+                "spark.app.bronze":  "gs://crowdsource-data-app-clone-bronze",
+                "spark.app.silver":  "gs://crowdsource-data-app-clone-silver",
+                "spark.app.gold":    "gs://crowdsource-data-app-clone-gold",
+                "spark.app.bq_project": "crowdsource-data-app-clone",
+                "spark.app.bq_dataset": "opensignal_gold",
+                "spark.hadoop.google.cloud.auth.service.account.enable": "true",
+                "spark.hadoop.fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
+            },
+            "driver": {
+                "cores": 1,
+                "memory": driver_memory,
+                "serviceAccount": "ksa-spark",
+                "labels": {"version": "3.5.1"},
+            },
+            "executor": {
+                "cores": 2,
+                "instances": 2,
+                "memory": executor_memory,
+                "labels": {"version": "3.5.1"},
+            },
+            "restartPolicy": {"type": "Never"},
+        },
+    }
+
+
 default_args = {
     "owner": "data-engineering",
     "depends_on_past": False,
@@ -21,7 +66,6 @@ default_args = {
     "email_on_failure": False,
 }
 
-# ── DAG ───────────────────────────────────────────────────────────────────────
 with DAG(
     dag_id="daily_batch_pipeline",
     description="Bronze → Silver → Gold Spark medallion pipeline",
@@ -37,7 +81,12 @@ with DAG(
     bronze_submit = SparkKubernetesOperator(
         task_id="bronze_submit",
         namespace="spark",
-        application_file="kubernetes/spark/bronze-job.yaml",
+        application=spark_spec(
+            "bronze-measurements",
+            "bronze_job.py",
+            driver_memory="1g",
+            executor_memory="2g",
+        ),
         kubernetes_conn_id="kubernetes_default",
         do_xcom_push=True,
     )
@@ -45,7 +94,7 @@ with DAG(
     bronze_sensor = SparkKubernetesSensor(
         task_id="bronze_sensor",
         namespace="spark",
-        application_name="{{ task_instance.xcom_pull(task_ids='bronze_submit')['metadata']['name'] }}",
+        application_name="bronze-measurements",
         kubernetes_conn_id="kubernetes_default",
         timeout=900,
         poke_interval=30,
@@ -55,7 +104,12 @@ with DAG(
     silver_submit = SparkKubernetesOperator(
         task_id="silver_submit",
         namespace="spark",
-        application_file="kubernetes/spark/silver-job.yaml",
+        application=spark_spec(
+            "silver-measurements",
+            "silver_job.py",
+            driver_memory="2g",
+            executor_memory="3g",
+        ),
         kubernetes_conn_id="kubernetes_default",
         do_xcom_push=True,
     )
@@ -63,7 +117,7 @@ with DAG(
     silver_sensor = SparkKubernetesSensor(
         task_id="silver_sensor",
         namespace="spark",
-        application_name="{{ task_instance.xcom_pull(task_ids='silver_submit')['metadata']['name'] }}",
+        application_name="silver-measurements",
         kubernetes_conn_id="kubernetes_default",
         timeout=900,
         poke_interval=30,
@@ -73,7 +127,12 @@ with DAG(
     gold_submit = SparkKubernetesOperator(
         task_id="gold_submit",
         namespace="spark",
-        application_file="kubernetes/spark/gold-job.yaml",
+        application=spark_spec(
+            "gold-operator-metrics",
+            "gold_job.py",
+            driver_memory="2g",
+            executor_memory="4g",
+        ),
         kubernetes_conn_id="kubernetes_default",
         do_xcom_push=True,
     )
@@ -81,7 +140,7 @@ with DAG(
     gold_sensor = SparkKubernetesSensor(
         task_id="gold_sensor",
         namespace="spark",
-        application_name="{{ task_instance.xcom_pull(task_ids='gold_submit')['metadata']['name'] }}",
+        application_name="gold-operator-metrics",
         kubernetes_conn_id="kubernetes_default",
         timeout=900,
         poke_interval=30,
