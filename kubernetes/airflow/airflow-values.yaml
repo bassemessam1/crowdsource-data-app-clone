@@ -1,0 +1,106 @@
+# ── Airflow image ─────────────────────────────────────────────────────────────
+defaultAirflowTag: "2.9.2"
+airflowVersion: "2.9.2"
+
+# ── Executor ──────────────────────────────────────────────────────────────────
+# KubernetesExecutor — each task gets its own pod
+# No shared workers — complete isolation between tasks
+executor: KubernetesExecutor
+
+# ── Database ──────────────────────────────────────────────────────────────────
+data:
+  metadataConnection:
+    user: airflow
+    pass: fAZHULPPWrL63PcwkluzX5fB
+    host: 10.47.0.3
+    port: 5432
+    db: airflow
+    protocol: postgresql
+
+# ── Disable built-in Postgres (we use Cloud SQL) ─────────────────────────────
+postgresql:
+  enabled: false
+
+# ── Web server ────────────────────────────────────────────────────────────────
+webserver:
+  defaultUser:
+    enabled: true
+    role: Admin
+    username: admin
+    email: admin@crowdsource.dev
+    firstName: Admin
+    lastName: User
+    password: crowdsource-dev-2026
+  
+  startupProbe:
+    failureThreshold: 30
+    periodSeconds: 15
+    timeoutSeconds: 30
+  livenessProbe:
+    failureThreshold: 10
+    periodSeconds: 30
+    timeoutSeconds: 30
+  readinessProbe:
+    failureThreshold: 10
+    periodSeconds: 30
+    timeoutSeconds: 30
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+scheduler:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ── Service account — uses ksa-airflow for Workload Identity ─────────────────
+serviceAccount:
+  create: false
+  name: ksa-airflow
+
+workers:
+  serviceAccount:
+    create: false
+    name: ksa-airflow
+
+# ── DAGs — GitSync pulls from GitHub repo ────────────────────────────────────
+dags:
+  gitSync:
+    enabled: true
+    repo: https://github.com/bassemessam1/crowdsource-data-app-clone.git
+    branch: main
+    rev: HEAD
+    depth: 1
+    maxFailures: 3
+    subPath: dags
+    period: 60s
+    containerName: git-sync
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs:
+  persistence:
+    enabled: false
+
+# ── Config ────────────────────────────────────────────────────────────────────
+config:
+  core:
+    load_examples: "False"
+  kubernetes_executor:
+    namespace: airflow
+    worker_service_account_name: ksa-airflow
+  logging:
+    logging_level: INFO

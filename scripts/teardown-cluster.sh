@@ -14,10 +14,12 @@
 #
 # What is LOST (recreated by startup script):
 #   - GKE cluster and all pods
-#   - Helm releases (cert-manager, Strimzi, ESO, Prometheus)
+#   - Helm releases (cert-manager, Strimzi, ESO, Prometheus, Spark Operator)
 #   - Kubernetes namespaces and their contents
 #   - Kafka topic data in broker PVCs
 #   - GCS Sink connector config (re-registered by startup script)
+#   - SparkApplication resources (re-run by startup script)
+#   - Airflow pods and DAG run history (DAG code preserved in GitHub)
 #
 # Usage: bash scripts/teardown-cluster.sh
 
@@ -69,8 +71,43 @@ gcloud container clusters get-credentials $CLUSTER_NAME \
 if [ -z "$SKIP_K8S" ]; then
   ok "Connected to $CLUSTER_NAME"
 
-  # ── Step 2: Phase 02 — Remove application workloads ──────────────────────
-  log "Step 2/5 — Removing Phase 02 resources..."
+  # ── Step 2: Phase 04 — Remove Airflow ────────────────────────────────────
+  log "Step 2/5 — Removing Phase 04, Phase 03 and Phase 02 resources..."
+
+  # Uninstall Airflow first — stops DAG scheduler before removing Spark jobs
+  # DAG run history is lost but DAG code is preserved in GitHub
+  if helm list -n airflow 2>/dev/null | grep -q "airflow"; then
+    helm uninstall airflow -n airflow \
+      --timeout 5m 2>/dev/null && \
+      ok "Airflow uninstalled" || \
+      warn "Could not uninstall Airflow — continuing"
+  else
+    warn "Airflow not found — skipping"
+  fi
+
+  # Delete Airflow PVC (built-in Postgres data) — not needed between sessions
+  kubectl delete pvc --all -n airflow \
+    --timeout=60s 2>/dev/null || true
+
+  # ── Phase 03 — Remove Spark jobs ─────────────────────────────────────────
+
+  # Delete all SparkApplications first — this cancels running jobs
+  # and removes driver/executor pods cleanly
+  kubectl delete sparkapplication --all -n spark \
+    --timeout=60s 2>/dev/null || true
+
+  # Force delete any stuck driver or executor pods
+  kubectl get pods -n spark \
+    --selector=spark-role=driver \
+    -o name 2>/dev/null | \
+    xargs -r kubectl delete -n spark --force --grace-period=0 2>/dev/null || true
+  kubectl get pods -n spark \
+    --selector=spark-role=executor \
+    -o name 2>/dev/null | \
+    xargs -r kubectl delete -n spark --force --grace-period=0 2>/dev/null || true
+  ok "Spark jobs removed"
+
+  # ── Phase 02 — Remove application workloads ──────────────────────────────
 
   # Remove Simulator first (stops new events being generated)
   kubectl delete deployment measurement-simulator -n ingest-api \
@@ -184,12 +221,16 @@ if [ -z "$SKIP_K8S" ]; then
   sleep 5
   ok "Resources cleaned up"
 
-  # ── Step 4: Uninstall Helm releases (Strimzi LAST) ───────────────────────────
+  # ── Step 4: Uninstall Helm releases ──────────────────────────────────────────
   log "Step 4/5 — Uninstalling Helm releases..."
 
-  # Strimzi must be LAST — it processes CRD finalizers during deletion.
-  # Removing it first leaves Kafka CRD finalizers stuck forever.
+  # Order matters:
+  # - airflow already uninstalled above (before Spark)
+  # - spark-operator before Strimzi (no CRD finalizer dependency between them)
+  # - Strimzi LAST — it processes Kafka CRD finalizers during deletion
+  #   Removing it first leaves Kafka namespaces stuck Terminating forever
   for release_ns in \
+    "spark-operator:spark" \
     "kube-prometheus:monitoring" \
     "external-secrets:external-secrets" \
     "cert-manager:cert-manager" \
@@ -215,7 +256,7 @@ log "Step 5/5 — Destroying GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"
 
 terraform destroy -auto-approve
-ok "GKE cluster destroyed"
+ok "GKE cluster destroyed"export GOOGLE_APPLICATION_CREDENTIALS='/home/bassem/github/crowdsource-data-app-clone/gcp-keys/crowdsource-data-app-key.json'
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -224,8 +265,10 @@ echo -e "${GREEN}║           TEARDOWN COMPLETE              ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster destroyed — billing stopped"
+echo -e "  ${GREEN}✓${NC}  Airflow uninstalled (DAG code preserved in GitHub)"
+echo -e "  ${GREEN}✓${NC}  Spark jobs cancelled and pods removed"
 echo -e "  ${GREEN}✓${NC}  Kafka PVCs deleted — no orphaned disks"
-echo -e "  ${GREEN}✓${NC}  GCS data preserved"
+echo -e "  ${GREEN}✓${NC}  GCS data preserved (landing/bronze/silver/gold)"
 echo -e "  ${GREEN}✓${NC}  BigQuery data preserved"
 echo -e "  ${GREEN}✓${NC}  Terraform state preserved"
 echo -e "  ${GREEN}✓${NC}  IAM + VPC preserved"
