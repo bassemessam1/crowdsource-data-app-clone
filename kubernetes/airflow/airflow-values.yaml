@@ -3,11 +3,9 @@ defaultAirflowTag: "2.9.2"
 airflowVersion: "2.9.2"
 
 # ── Executor ──────────────────────────────────────────────────────────────────
-# KubernetesExecutor — each task gets its own pod
-# No shared workers — complete isolation between tasks
 executor: KubernetesExecutor
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# ── Database — Cloud SQL PostgreSQL ──────────────────────────────────────────
 data:
   metadataConnection:
     user: airflow
@@ -31,7 +29,13 @@ webserver:
     firstName: Admin
     lastName: User
     password: crowdsource-dev-2026
-  
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
   startupProbe:
     failureThreshold: 30
     periodSeconds: 15
@@ -45,14 +49,6 @@ webserver:
     periodSeconds: 30
     timeoutSeconds: 30
 
-  resources:
-    requests:
-      cpu: 250m
-      memory: 512Mi
-    limits:
-      cpu: 500m
-      memory: 1Gi
-
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 scheduler:
   resources:
@@ -63,7 +59,18 @@ scheduler:
       cpu: 500m
       memory: 1Gi
 
-# ── Service account — uses ksa-airflow for Workload Identity ─────────────────
+# ── Triggerer ─────────────────────────────────────────────────────────────────
+triggerer:
+  enabled: false
+  # resources:
+  #   requests:
+  #     cpu: 50m
+  #     memory: 128Mi
+  #   limits:
+  #     cpu: 200m
+      # memory: 256Mi
+
+# ── Service accounts ──────────────────────────────────────────────────────────
 serviceAccount:
   create: false
   name: ksa-airflow
@@ -84,7 +91,6 @@ dags:
     maxFailures: 3
     subPath: airflow/dags
     period: 60s
-    containerName: git-sync
     resources:
       requests:
         cpu: 50m
