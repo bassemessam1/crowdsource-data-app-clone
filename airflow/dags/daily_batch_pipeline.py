@@ -157,7 +157,7 @@ with DAG(
     dag_id="daily_batch_pipeline",
     description="Bronze → Silver → Gold Spark medallion pipeline",
     default_args=default_args,
-    start_date=datetime(2026, 8, 31),
+    start_date=datetime(2026, 9, 27),
     schedule_interval="@hourly",
     catchup=False,
     max_active_runs=1,
