@@ -16,6 +16,7 @@
 #   - Measurement Simulator (Phase 02)
 #   - Spark Operator (Phase 03)
 #   - Bronze / Silver / Gold Spark jobs (Phase 03)
+#   - Airflow 2.9.2 with built-in Postgres (Phase 04)
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -66,7 +67,7 @@ helm version --short &>/dev/null || \
 ok "Helm installed: $(helm version --short)"
 
 # Check Helm repos are configured
-REQUIRED_REPOS="jetstack external-secrets strimzi prometheus-community spark-operator"
+REQUIRED_REPOS="jetstack external-secrets strimzi prometheus-community spark-operator apache-airflow"
 for repo in $REQUIRED_REPOS; do
   helm repo list 2>/dev/null | grep -q "$repo" || {
     warn "Helm repo '$repo' missing — adding..."
@@ -76,6 +77,7 @@ for repo in $REQUIRED_REPOS; do
       strimzi)              helm repo add strimzi https://strimzi.io/charts/ ;;
       prometheus-community) helm repo add prometheus-community https://prometheus-community.github.io/helm-charts ;;
       spark-operator)       helm repo add spark-operator https://kubeflow.github.io/spark-operator ;;
+      apache-airflow)       helm repo add apache-airflow https://airflow.apache.org ;;
     esac
     ok "Added $repo repo"
   }
@@ -455,6 +457,35 @@ else
 fi
 echo ""
 
+# ── Phase 04: Airflow ────────────────────────────────────────────────────────
+log "Phase 04 — Deploying Airflow..."
+
+AIRFLOW_VALUES="$REPO_ROOT/kubernetes/airflow/airflow-values.yaml"
+
+if [ -f "$AIRFLOW_VALUES" ]; then
+  helm upgrade --install airflow apache-airflow/airflow \
+    --namespace airflow \
+    --version 1.13.1 \
+    --values "$AIRFLOW_VALUES" \
+    --cleanup-on-fail \
+    --timeout 20m \
+    --wait 2>/dev/null && \
+    ok "Airflow installed" || \
+    warn "Airflow install failed — check: kubectl get pods -n airflow"
+
+  log "  Waiting for Airflow webserver to be ready (up to 10 minutes)..."
+  kubectl wait deployment/airflow-webserver \
+    --for=condition=Available \
+    --timeout=600s \
+    -n airflow 2>/dev/null && \
+    ok "Airflow webserver ready" || \
+    warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
+else
+  warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
+  warn "Create it at: kubernetes/airflow/airflow-values.yaml"
+fi
+echo ""
+
 # ── Final verification ────────────────────────────────────────────────────────
 log "Running final verification..."
 echo ""
@@ -477,7 +508,7 @@ echo -e "${GREEN}║         STARTUP COMPLETE                 ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster running"
-echo -e "  ${GREEN}✓${NC}  All 5 operators installed (+ Spark)"
+echo -e "  ${GREEN}✓${NC}  All 5 operators installed (Spark + Airflow)"
 echo -e "  ${GREEN}✓${NC}  Workload Identity active"
 echo -e "  ${GREEN}✓${NC}  Kafka cluster + topics deployed"
 echo -e "  ${GREEN}✓${NC}  Schema Registry running"
@@ -485,6 +516,7 @@ echo -e "  ${GREEN}✓${NC}  Kafka Connect + GCS Sink running"
 echo -e "  ${GREEN}✓${NC}  Ingest API running (static IP: 34.89.87.57)"
 echo -e "  ${GREEN}✓${NC}  Measurement Simulator running"
 echo -e "  ${GREEN}✓${NC}  Spark Bronze / Silver / Gold jobs run"
+echo -e "  ${GREEN}✓${NC}  Airflow running (built-in Postgres)"
 echo ""
 echo -e "  ${YELLOW}Access Grafana:${NC}"
 echo -e "  kubectl port-forward svc/\$(kubectl get svc -n monitoring --selector=app.kubernetes.io/name=grafana -o name | head -1 | cut -d/ -f2) 3000:80 -n monitoring"
@@ -493,7 +525,11 @@ echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
 echo -e "  ${YELLOW}Check BigQuery:${NC}"
-echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
+echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo ""
+echo -e "  ${YELLOW}Access Airflow UI:${NC}"
+echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
+echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
 echo ""
 echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"

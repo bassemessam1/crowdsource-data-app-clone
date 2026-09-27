@@ -457,6 +457,18 @@ else
 fi
 echo ""
 
+# ── Phase 04: Airflow RBAC ───────────────────────────────────────────────────
+# Must be applied before Airflow starts so scheduler can create SparkApplications
+# ClusterRoleBinding is destroyed with the cluster — recreate every session
+log "Phase 04 — Applying Airflow SparkApplication RBAC..."
+if [ -f "$REPO_ROOT/kubernetes/airflow/airflow-spark-rbac.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/airflow/airflow-spark-rbac.yaml"
+  ok "Airflow SparkApplication RBAC applied"
+else
+  warn "airflow-spark-rbac.yaml not found — DAG will fail with 403 Forbidden"
+fi
+echo ""
+
 # ── Phase 04: Airflow ────────────────────────────────────────────────────────
 log "Phase 04 — Deploying Airflow..."
 
@@ -468,8 +480,7 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     --version 1.13.1 \
     --values "$AIRFLOW_VALUES" \
     --cleanup-on-fail \
-    --timeout 20m \
-    --wait 2>/dev/null && \
+    --timeout 20m 2>/dev/null && \
     ok "Airflow installed" || \
     warn "Airflow install failed — check: kubectl get pods -n airflow"
 
@@ -480,6 +491,33 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     -n airflow 2>/dev/null && \
     ok "Airflow webserver ready" || \
     warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
+
+  # Clear any stale queued DAG runs left from previous sessions
+  # These accumulate because hourly schedule tries to backfill missed runs
+  log "  Clearing stale DAG runs from previous sessions..."
+  sleep 30
+  AIRFLOW_SCHEDULER=$(kubectl get pods -n airflow \
+    --selector=component=scheduler \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$AIRFLOW_SCHEDULER" ]; then
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags pause daily_batch_pipeline 2>/dev/null || true
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      python3 -c "
+from airflow.models import DagRun
+from airflow.utils.session import create_session
+with create_session() as session:
+    runs = session.query(DagRun).filter(
+        DagRun.dag_id=='daily_batch_pipeline',
+        DagRun.state.in_(['queued','failed'])
+    ).all()
+    for r in runs:
+        session.delete(r)
+    session.commit()
+    print(f'Cleared {len(runs)} stale dag runs')
+" 2>/dev/null && ok "Stale DAG runs cleared" || \
+      warn "Could not clear stale runs — clear manually via Airflow UI"
+  fi
 else
   warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
   warn "Create it at: kubernetes/airflow/airflow-values.yaml"
@@ -525,7 +563,7 @@ echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
 echo -e "  ${YELLOW}Check BigQuery:${NC}"
-echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo -e "  bq query --nouse_legacy_sql 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
 echo ""
 echo -e "  ${YELLOW}Access Airflow UI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
