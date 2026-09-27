@@ -37,16 +37,16 @@ webserver:
       cpu: 500m
       memory: 1Gi
   startupProbe:
-    failureThreshold: 30
-    periodSeconds: 15
+    failureThreshold: 60
+    periodSeconds: 10
     timeoutSeconds: 30
   livenessProbe:
-    failureThreshold: 10
-    periodSeconds: 30
+    failureThreshold: 20
+    periodSeconds: 60
     timeoutSeconds: 30
   readinessProbe:
-    failureThreshold: 10
-    periodSeconds: 30
+    failureThreshold: 20
+    periodSeconds: 60
     timeoutSeconds: 30
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
