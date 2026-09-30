@@ -148,7 +148,7 @@ def run_gold():
         "gold-operator-metrics", "gold_job.py", "2g", "4g",
         extra_conf={
             "spark.app.bq_project": "crowdsource-data-app-clone",
-            "spark.app.bq_dataset": "opensignal_gold",
+            "spark.app.bq_dataset": "crowdsource_data_app_gold",
         },
     )
 
