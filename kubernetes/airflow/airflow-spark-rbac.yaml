@@ -19,3 +19,6 @@ subjects:
   - kind: ServiceAccount
     name: airflow-scheduler
     namespace: airflow
+  - kind: ServiceAccount
+    name: ksa-airflow
+    namespace: airflow

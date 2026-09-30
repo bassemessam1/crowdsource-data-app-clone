@@ -29,7 +29,7 @@ with DAG(
         task_id="check_operator_metrics",
         sql="""
             SELECT COUNT(*)
-            FROM opensignal_gold.operator_metrics
+            FROM crowdsource_data_app_gold.operator_metrics
             WHERE year = CAST(FORMAT_DATE('%Y', CURRENT_DATE()) AS STRING)
               AND month = CAST(FORMAT_DATE('%m', CURRENT_DATE()) AS STRING)
               AND day = CAST(FORMAT_DATE('%d', CURRENT_DATE()) AS STRING)
@@ -42,7 +42,7 @@ with DAG(
         task_id="check_per_operator",
         sql="""
             SELECT COUNT(DISTINCT operator_name)
-            FROM opensignal_gold.operator_metrics
+            FROM crowdsource_data_app_gold.operator_metrics
         """,
         use_legacy_sql=False,
         gcp_conn_id="google_cloud_default",
