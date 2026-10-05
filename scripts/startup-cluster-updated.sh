@@ -314,19 +314,33 @@ if [ -f "$KC_MANIFEST" ]; then
   # Re-register the GCS Sink connector via REST API
   # Uses confluent.topic.bootstrap.servers and gcs.credentials.path
   # which are required by the Confluent Platform image
-  log "  Registering GCS Sink Connector..."
-  sleep 15
 
-  kubectl run connector-restore \
-    --image=curlimages/curl \
-    --namespace=kafka \
-    --restart=Never \
-    --rm \
-    -- sh -c \
-    'curl -s -X POST http://kafka-connect:8083/connectors \
-      -H "Content-Type: application/json" \
-      -d @- << ENDJSON
-{
+  log "  Waiting for Kafka Connect REST API to accept connections..."
+  REST_READY=false
+  for i in $(seq 1 30); do
+    if kubectl exec -n kafka deploy/kafka-connect -- \
+       curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/connectors 2>/dev/null | grep -q 200; then
+      REST_READY=true
+      ok "Kafka Connect REST API is up"
+      break
+    fi
+    sleep 10
+  done
+  if [ "$REST_READY" = false ]; then
+    warn "Kafka Connect REST API never responded — connector registration will likely fail"
+  fi
+
+  log "  Registering GCS Sink Connector (via port-forward)..."
+
+  # Start a background port-forward, give it a moment to establish
+  kubectl port-forward svc/kafka-connect 8083:8083 -n kafka > /tmp/kc-portforward.log 2>&1 &
+  KC_PF_PID=$!
+  sleep 5
+
+  CONNECTOR_REGISTERED=false
+  if curl -s -X POST http://localhost:8083/connectors \
+    -H "Content-Type: application/json" \
+    -d '{
   "name": "gcs-sink-raw-measurements",
   "config": {
     "connector.class": "io.confluent.connect.gcs.GcsSinkConnector",
@@ -338,7 +352,9 @@ if [ -f "$KC_MANIFEST" ]; then
     "rotate.interval.ms": "300000",
     "storage.class": "io.confluent.connect.gcs.storage.GcsStorage",
     "format.class": "io.confluent.connect.gcs.format.avro.AvroFormat",
-    "path.format": "year=YYYY/month=MM/day=dd/hour=HH",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "partition.duration.ms": "3600000",
+    "path.format": "'\''year'\''=YYYY/'\''month'\''=MM/'\''day'\''=dd/'\''hour'\''=HH",
     "locale": "en_GB",
     "timezone": "UTC",
     "timestamp.extractor": "RecordField",
@@ -354,15 +370,31 @@ if [ -f "$KC_MANIFEST" ]; then
     "confluent.topic.replication.factor": "3",
     "gcs.credentials.path": "/etc/gcs-credentials/key.json"
   }
-}
-ENDJSON
-' 2>/dev/null && \
-    ok "GCS Sink Connector registered" || \
-    warn "Connector registration failed — register manually after startup"
+}' 2>/dev/null | grep -q '"name"'; then
+    CONNECTOR_REGISTERED=true
+  fi
+
+  # Verify it actually reached RUNNING state, not just that the POST was accepted
+  if [ "$CONNECTOR_REGISTERED" = true ]; then
+    sleep 5
+    CONNECTOR_STATE=$(curl -s http://localhost:8083/connectors/gcs-sink-raw-measurements/status 2>/dev/null | \
+      grep -o '"state":"[A-Z]*"' | head -1)
+    if echo "$CONNECTOR_STATE" | grep -q RUNNING; then
+      ok "GCS Sink Connector registered and RUNNING"
+    else
+      warn "Connector registered but state is: $CONNECTOR_STATE — check: kubectl logs -n kafka -l app=kafka-connect"
+    fi
+  else
+    warn "Connector registration failed — register manually: kubectl port-forward svc/kafka-connect 8083:8083 -n kafka"
+  fi
+
+  # Clean up the port-forward
+  kill $KC_PF_PID 2>/dev/null || true
 
 else
   warn "No Kafka Connect manifest found — skipping"
 fi
+
 echo ""
 
 # ── Phase 02: Ingest API ──────────────────────────────────────────────────────
@@ -457,6 +489,18 @@ else
 fi
 echo ""
 
+# ── Phase 04: Airflow RBAC ───────────────────────────────────────────────────
+# Must be applied before Airflow starts so scheduler can create SparkApplications
+# ClusterRoleBinding is destroyed with the cluster — recreate every session
+log "Phase 04 — Applying Airflow SparkApplication RBAC..."
+if [ -f "$REPO_ROOT/kubernetes/airflow/airflow-spark-rbac.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/airflow/airflow-spark-rbac.yaml"
+  ok "Airflow SparkApplication RBAC applied"
+else
+  warn "airflow-spark-rbac.yaml not found — DAG will fail with 403 Forbidden"
+fi
+echo ""
+
 # ── Phase 04: Airflow ────────────────────────────────────────────────────────
 log "Phase 04 — Deploying Airflow..."
 
@@ -468,8 +512,7 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     --version 1.13.1 \
     --values "$AIRFLOW_VALUES" \
     --cleanup-on-fail \
-    --timeout 20m \
-    --wait 2>/dev/null && \
+    --timeout 20m 2>/dev/null && \
     ok "Airflow installed" || \
     warn "Airflow install failed — check: kubectl get pods -n airflow"
 
@@ -480,6 +523,39 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     -n airflow 2>/dev/null && \
     ok "Airflow webserver ready" || \
     warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
+
+  # Clear any stale queued DAG runs left from previous sessions
+  # These accumulate because hourly schedule tries to backfill missed runs
+  log "  Clearing stale DAG runs from previous sessions..."
+  sleep 30
+  AIRFLOW_SCHEDULER=$(kubectl get pods -n airflow \
+    --selector=component=scheduler \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$AIRFLOW_SCHEDULER" ]; then
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags pause daily_batch_pipeline 2>/dev/null || true
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      python3 -c "
+from airflow.models import DagRun
+from airflow.utils.session import create_session
+with create_session() as session:
+    runs = session.query(DagRun).filter(
+        DagRun.dag_id=='daily_batch_pipeline',
+        DagRun.state.in_(['queued','failed'])
+    ).all()
+    for r in runs:
+        session.delete(r)
+    session.commit()
+    print(f'Cleared {len(runs)} stale dag runs')
+" 2>/dev/null && ok "Stale DAG runs cleared" || \
+      warn "Could not clear stale runs — clear manually via Airflow UI"
+
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags unpause daily_batch_pipeline 2>/dev/null && \
+      ok "daily_batch_pipeline unpaused" || \
+      warn "Could not unpause DAG — unpause manually via Airflow UI"
+
+  fi
 else
   warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
   warn "Create it at: kubernetes/airflow/airflow-values.yaml"
@@ -525,7 +601,7 @@ echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
 echo -e "  ${YELLOW}Check BigQuery:${NC}"
-echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo -e "  bq query --nouse_legacy_sql 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
 echo ""
 echo -e "  ${YELLOW}Access Airflow UI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
