@@ -16,7 +16,7 @@
 #   - Measurement Simulator (Phase 02)
 #   - Spark Operator (Phase 03)
 #   - Bronze / Silver / Gold Spark jobs (Phase 03)
-#   - Airflow 2.9.2 with built-in Postgres (Phase 04)
+#   - Airflow 2.9.2 with Cloud SQL Postgres (Phase 04)
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -49,7 +49,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo ""
 echo -e "${BLUE}╔═════════════════════════════════════=============═════╗${NC}"
-echo -e "${BLUE}║        CROWDSOURCE DATA APP CLUSTER STARTUP           ║${NC}"
+echo -e "${BLUE}║    CROWDSOURCEDATAAPPCLUSTERSTARTUP                   ║${NC}"
 echo -e "${BLUE}╚═════════════════════════════════════=============═════╝${NC}"
 echo ""
 
@@ -314,8 +314,22 @@ if [ -f "$KC_MANIFEST" ]; then
   # Re-register the GCS Sink connector via REST API
   # Uses confluent.topic.bootstrap.servers and gcs.credentials.path
   # which are required by the Confluent Platform image
+  log "  Waiting for Kafka Connect REST API to accept connections..."
+  REST_READY=false
+  for i in $(seq 1 30); do
+    if kubectl run connect-probe-$i --image=curlimages/curl --namespace=kafka --restart=Never --rm -i \
+       -- curl -s -o /dev/null -w "%{http_code}" http://kafka-connect:8083/connectors 2>/dev/null | grep -q 200; then
+      REST_READY=true
+      ok "Kafka Connect REST API is up"
+      break
+    fi
+    sleep 10
+  done
+  if [ "$REST_READY" = false ]; then
+    warn "Kafka Connect REST API never responded — connector registration will likely fail"
+  fi
+
   log "  Registering GCS Sink Connector..."
-  sleep 15
 
   kubectl run connector-restore \
     --image=curlimages/curl \
@@ -338,6 +352,8 @@ if [ -f "$KC_MANIFEST" ]; then
     "rotate.interval.ms": "300000",
     "storage.class": "io.confluent.connect.gcs.storage.GcsStorage",
     "format.class": "io.confluent.connect.gcs.format.avro.AvroFormat",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "partition.duration.ms": "3600000",
     "path.format": "year=YYYY/month=MM/day=dd/hour=HH",
     "locale": "en_GB",
     "timezone": "UTC",
@@ -517,6 +533,11 @@ with create_session() as session:
     print(f'Cleared {len(runs)} stale dag runs')
 " 2>/dev/null && ok "Stale DAG runs cleared" || \
       warn "Could not clear stale runs — clear manually via Airflow UI"
+
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags unpause daily_batch_pipeline 2>/dev/null && \
+      ok "daily_batch_pipeline unpaused" || \
+      warn "Could not unpause DAG — unpause manually via Airflow UI"
   fi
 else
   warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
@@ -533,7 +554,7 @@ kubectl get pods -A \
   --field-selector=status.phase!=Running \
   --field-selector=status.phase!=Succeeded \
   2>/dev/null | grep -v "^NAMESPACE" || \
-  echo -e "  ${GREEN}All pods healthy${NC}"
+  echo -e "  GREENAllpodshealthy{NC}"
 
 echo ""
 echo "  Helm releases:"
@@ -542,7 +563,7 @@ helm list -A --output table 2>/dev/null | \
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║         STARTUP COMPLETE                 ║${NC}"
+echo -e "${GREEN}║     STARTUPCOMPLETE                      ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster running"
@@ -554,21 +575,21 @@ echo -e "  ${GREEN}✓${NC}  Kafka Connect + GCS Sink running"
 echo -e "  ${GREEN}✓${NC}  Ingest API running (static IP: 34.89.87.57)"
 echo -e "  ${GREEN}✓${NC}  Measurement Simulator running"
 echo -e "  ${GREEN}✓${NC}  Spark Bronze / Silver / Gold jobs run"
-echo -e "  ${GREEN}✓${NC}  Airflow running (built-in Postgres)"
+echo -e "  ${GREEN}✓${NC}  Airflow running (Cloud SQL Postgres)"
 echo ""
-echo -e "  ${YELLOW}Access Grafana:${NC}"
+echo -e "  YELLOWAccessGrafana:${NC}"
 echo -e "  kubectl port-forward svc/\$(kubectl get svc -n monitoring --selector=app.kubernetes.io/name=grafana -o name | head -1 | cut -d/ -f2) 3000:80 -n monitoring"
 echo ""
-echo -e "  ${YELLOW}Test Ingest API:${NC}"
+echo -e "  YELLOWTestIngestAPI:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
-echo -e "  ${YELLOW}Check BigQuery:${NC}"
-echo -e "  bq query --nouse_legacy_sql 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo -e "  YELLOWCheckBigQuery:${NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
 echo ""
-echo -e "  ${YELLOW}Access Airflow UI:${NC}"
+echo -e "  YELLOWAccessAirflowUI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
 echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
 echo ""
-echo -e "  ${YELLOW}When done for the day:${NC}"
+echo -e "  YELLOWWhendonefortheday:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
 echo ""

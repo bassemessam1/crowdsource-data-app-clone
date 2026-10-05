@@ -74,7 +74,20 @@ if [ -z "$SKIP_K8S" ]; then
   # ── Step 2: Phase 04 — Remove Airflow ────────────────────────────────────
   log "Step 2/5 — Removing Phase 04, Phase 03 and Phase 02 resources..."
 
-  # Uninstall Airflow first — stops DAG scheduler before removing Spark jobs
+  # Pause DAG and cancel running tasks before uninstalling
+  # Prevents orphaned SparkApplications being left in spark namespace
+  AIRFLOW_SCHEDULER=$(kubectl get pods -n airflow \
+    --selector=component=scheduler \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$AIRFLOW_SCHEDULER" ]; then
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags pause daily_batch_pipeline 2>/dev/null || true
+    kubectl exec -n airflow $AIRFLOW_SCHEDULER -c scheduler -- \
+      airflow dags pause data_quality_check 2>/dev/null || true
+    ok "Airflow DAGs paused"
+  fi
+
+  # Uninstall Airflow — stops DAG scheduler before removing Spark jobs
   # DAG run history is lost but DAG code is preserved in GitHub
   if helm list -n airflow 2>/dev/null | grep -q "airflow"; then
     helm uninstall airflow -n airflow \
@@ -256,7 +269,7 @@ log "Step 5/5 — Destroying GKE cluster via Terraform..."
 cd "$REPO_ROOT/terraform/gke"
 
 terraform destroy -auto-approve
-ok "GKE cluster destroyed"export GOOGLE_APPLICATION_CREDENTIALS='/home/bassem/github/crowdsource-data-app-clone/gcp-keys/crowdsource-data-app-key.json'
+ok "GKE cluster destroyed"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
