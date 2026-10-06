@@ -17,6 +17,11 @@
 #   - Spark Operator (Phase 03)
 #   - Bronze / Silver / Gold Spark jobs (Phase 03)
 #   - Airflow 2.9.2 with built-in Postgres (Phase 04)
+#   - dbt transform task runs automatically as part of 
+#     daily_batch_pipeline (phase 05) - no seperate step 
+#     needed: ksa-dbt comes from the same `terraform apply` 
+#     as the rest of gke module, and the task itself is pulled in 
+#     via GitSync along with the rest of the DAG 
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -606,6 +611,12 @@ echo ""
 echo -e "  ${YELLOW}Access Airflow UI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
 echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
+echo ""
+echo -e "  YELLOWCheckBigQuery(gold):{NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
+echo ""
+echo -e "  YELLOWCheckBigQuery(dbtmarts):{NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.operator_rankings ORDER BY metric_date DESC LIMIT 10'"
 echo ""
 echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
