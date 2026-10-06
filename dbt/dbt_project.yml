@@ -1,0 +1,21 @@
+name: 'crowdsource_data_app'
+version: '1.0.0'
+config-version: 2
+
+profile: 'crowdsource_data_app'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  crowdsource_data_app:
+    staging:
+      +materialized: view
+      +schema: null   # stays in the target dataset, not a staging-specific schema
+    marts:
+      +materialized: table
