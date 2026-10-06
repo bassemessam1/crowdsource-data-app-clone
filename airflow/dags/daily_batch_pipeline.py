@@ -6,6 +6,9 @@ No kubectl binary needed — uses in-cluster config.
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+
+DBT_IMAGE = "europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/dbt:latest"
 
 IMAGE = "europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark:3.5.1"
 
@@ -187,4 +190,17 @@ with DAG(
         execution_timeout=timedelta(minutes=20),
     )
 
-    delete_old >> bronze >> silver >> gold
+    dbt_transform = KubernetesPodOperator(
+        task_id="dbt_transform",
+        name="dbt-transform",
+        namespace="airflow",
+        service_account_name="ksa-dbt",
+        image=DBT_IMAGE,
+        image_pull_policy="Always",
+        get_logs=True,
+        is_delete_operator_pod=True,
+        execution_timeout=timedelta(minutes=10),
+    )
+
+
+    delete_old >> bronze >> silver >> gold >> dbt_transform
