@@ -1,0 +1,17 @@
+# Copy this to profiles.yml (same directory) and do NOT commit the copy.
+# Local dev: run `gcloud auth application-default login` first, then `method: oauth` works.
+# In-container (Phase 05 step 9): swap to a service-account key mounted via Workload Identity,
+# or `method: oauth` still works if the pod runs as ksa-dbt with the right IAM bindings.
+
+crowdsource_data_app:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: crowdsource-data-app-clone
+      dataset: crowdsource_data_app_marts
+      location: europe-west2
+      threads: 4
+      timeout_seconds: 300
+      priority: interactive

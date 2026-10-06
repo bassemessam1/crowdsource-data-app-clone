@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: daily_operator_summary
+    description: "Daily rollup of operator_metrics by operator and date."
+    columns:
+      - name: operator_name
+        tests:
+          - not_null
+      - name: metric_date
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - operator_name
+              - metric_date
+
+  - name: operator_rankings
+    description: >
+      Daily operator rankings by average download speed, upload speed,
+      and latency. Built on top of daily_operator_summary.
+    columns:
+      - name: operator_name
+        tests:
+          - not_null
+      - name: metric_date
+        tests:
+          - not_null
+      - name: download_rank
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - operator_name
+              - metric_date

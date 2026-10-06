@@ -1,0 +1,41 @@
+version: 2
+
+sources:
+  - name: gold
+    database: crowdsource-data-app-clone
+    schema: crowdsource_data_app_gold
+    description: >
+      Hourly operator-level network metrics, written by gold_job.py
+      (Spark, .mode("overwrite")). dbt only reads from this dataset —
+      never writes to it. year/month/day/hour are unpadded string
+      columns (e.g. month = '9', not '09').
+    tables:
+      - name: operator_metrics
+        description: "One row per (operator_name, year, month, day, hour)."
+        loaded_at_field: >
+          TIMESTAMP(CONCAT(
+            year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0'),
+            ' ', LPAD(hour, 2, '0'), ':00:00'
+          ))
+    config:
+        freshness:
+          warn_after: {count: 6, period: hour}
+          error_after: {count: 24, period: hour}
+        columns:
+          - name: operator_name
+            description: "EE, Three, O2, Vodafone, or Unknown (unmapped MCC/MNC)."
+          - name: year
+            description: "Unpadded string, e.g. '2026'."
+          - name: month
+            description: "Unpadded string, e.g. '9' for September."
+          - name: day
+            description: "Unpadded string, e.g. '5'."
+          - name: hour
+            description: "Unpadded string, e.g. '7' for 07:00."
+          - name: measurement_count
+          - name: avg_download_mbps
+          - name: avg_upload_mbps
+          - name: avg_latency_ms
+          - name: p50_download_mbps
+          - name: p90_download_mbps
+          - name: stddev_download_mbps

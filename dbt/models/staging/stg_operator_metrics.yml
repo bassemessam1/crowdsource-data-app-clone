@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: stg_operator_metrics
+    description: >
+      Cleaned operator_metrics with a real DATE/TIMESTAMP reconstructed
+      from the unpadded year/month/day/hour string columns.
+    columns:
+      - name: operator_name
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['EE', 'Three', 'O2', 'Vodafone', 'Unknown']
+      - name: metric_hour
+        tests:
+          - not_null
+      - name: metric_date
+        tests:
+          - not_null
+      - name: measurement_count
+        tests:
+          - not_null
