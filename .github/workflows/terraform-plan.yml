@@ -2,69 +2,152 @@ name: Terraform Plan
 
 
 "on":
- push:
-   branches: [main]
-   paths:
-     - "terraform/**"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
 
 
 permissions:
- id-token: write
- contents: read
+  id-token: write
+  contents: read
 
 
 jobs:
- detect-changes:
-   runs-on: ubuntu-latest
-   outputs:
-     foundations: ${{ steps.filter.outputs.foundations }}
-     gke: ${{ steps.filter.outputs.gke }}
-     lake: ${{ steps.filter.outputs.lake }}
-     cloudsql: ${{ steps.filter.outputs.cloudsql }}
-   steps:
-     - uses: actions/checkout@v4
-     - uses: dorny/paths-filter@v3
-       id: filter
-       with:
-         filters: |
-           foundations:
-             - 'terraform/foundations/**'
-           gke:
-             - 'terraform/gke/**'
-           lake:
-             - 'terraform/lake/**'
-           cloudsql:
-             - 'terraform/cloudsql/**'
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      foundations: ${{ steps.filter.outputs.foundations }}
+      gke: ${{ steps.filter.outputs.gke }}
+      lake: ${{ steps.filter.outputs.lake }}
+      cloudsql: ${{ steps.filter.outputs.cloudsql }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            foundations:
+              - 'terraform/foundations/**'
+            gke:
+              - 'terraform/gke/**'
+            lake:
+              - 'terraform/lake/**'
+            cloudsql:
+              - 'terraform/cloudsql/**'
 
 
- plan:
-   needs: detect-changes
-   runs-on: ubuntu-latest
-   strategy:
-     fail-fast: false
-     matrix:
-       module: [foundations, gke, lake, cloudsql]
-   if: needs.detect-changes.outputs[matrix.module] == 'true'
-   permissions:
-     id-token: write
-     contents: read
-   steps:
-     - uses: actions/checkout@v4
-     - uses: google-github-actions/auth@v2
-       with:
-         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
-     - uses: hashicorp/setup-terraform@v3
-     - name: terraform fmt check
-       working-directory: terraform/${{ matrix.module }}
-       run: terraform fmt -check -recursive
-       continue-on-error: true  # don't fail the whole plan over formatting
-     - name: terraform init
-       working-directory: terraform/${{ matrix.module }}
-       run: terraform init
-     - name: terraform validate
-       working-directory: terraform/${{ matrix.module }}
-       run: terraform validate
-     - name: terraform plan
-       working-directory: terraform/${{ matrix.module }}
-       run: terraform plan -no-color
+  plan-foundations:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.foundations == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform fmt check
+        working-directory: terraform/foundations
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - name: terraform init
+        working-directory: terraform/foundations
+        run: terraform init
+      - name: terraform validate
+        working-directory: terraform/foundations
+        run: terraform validate
+      - name: terraform plan
+        working-directory: terraform/foundations
+        run: terraform plan -no-color
+
+
+  plan-gke:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.gke == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform fmt check
+        working-directory: terraform/gke
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - name: terraform init
+        working-directory: terraform/gke
+        run: terraform init
+      - name: terraform validate
+        working-directory: terraform/gke
+        run: terraform validate
+      - name: terraform plan
+        working-directory: terraform/gke
+        run: terraform plan -no-color
+
+
+  plan-lake:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.lake == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform fmt check
+        working-directory: terraform/lake
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - name: terraform init
+        working-directory: terraform/lake
+        run: terraform init
+      - name: terraform validate
+        working-directory: terraform/lake
+        run: terraform validate
+      - name: terraform plan
+        working-directory: terraform/lake
+        run: terraform plan -no-color
+
+
+  plan-cloudsql:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.cloudsql == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform fmt check
+        working-directory: terraform/cloudsql
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      - name: terraform init
+        working-directory: terraform/cloudsql
+        run: terraform init
+      - name: terraform validate
+        working-directory: terraform/cloudsql
+        run: terraform validate
+      - name: terraform plan
+        working-directory: terraform/cloudsql
+        run: terraform plan -no-color
