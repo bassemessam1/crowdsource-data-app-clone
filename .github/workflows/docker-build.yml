@@ -1,0 +1,134 @@
+name: Build and Push Docker Images
+
+
+"on":
+ push:
+   branches: [main]
+   paths:
+     - "ingest-api/**"
+     - "simulator/**"
+     - "spark/**"
+     - "dbt/**"
+
+
+permissions:
+ id-token: write
+ contents: read
+
+
+jobs:
+ detect-changes:
+   runs-on: ubuntu-latest
+   outputs:
+     ingest-api: ${{ steps.filter.outputs.ingest-api }}
+     simulator: ${{ steps.filter.outputs.simulator }}
+     spark: ${{ steps.filter.outputs.spark }}
+     dbt: ${{ steps.filter.outputs.dbt }}
+   steps:
+     - uses: actions/checkout@v4
+     - uses: dorny/paths-filter@v3
+       id: filter
+       with:
+         filters: |
+           ingest-api:
+             - 'ingest-api/**'
+           simulator:
+             - 'simulator/**'
+           spark:
+             - 'spark/**'
+           dbt:
+             - 'dbt/**'
+
+
+ build-ingest-api:
+   needs: detect-changes
+   if: needs.detect-changes.outputs.ingest-api == 'true'
+   runs-on: ubuntu-latest
+   permissions:
+     id-token: write
+     contents: read
+   steps:
+     - uses: actions/checkout@v4
+     - uses: google-github-actions/auth@v2
+       with:
+         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+     - uses: google-github-actions/setup-gcloud@v2
+     - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+     - run: |
+         IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/ingest-api
+         docker build -t IMAGE:{{ github.sha }} -t $IMAGE:latest ingest-api/
+         docker push IMAGE:{{ github.sha }}
+         docker push $IMAGE:latest
+
+
+ build-simulator:
+   needs: detect-changes
+   if: needs.detect-changes.outputs.simulator == 'true'
+   runs-on: ubuntu-latest
+   permissions:
+     id-token: write
+     contents: read
+   steps:
+     - uses: actions/checkout@v4
+     - uses: google-github-actions/auth@v2
+       with:
+         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+     - uses: google-github-actions/setup-gcloud@v2
+     - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+     # NOTE: image path genuinely has a repeated "simulator/simulator" segment
+     # — matches what's already deployed (confirmed via `kubectl describe pod`
+     # image-pull events), not a typo introduced here.
+     - run: |
+         IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/simulator/simulator
+         docker build -t IMAGE:{{ github.sha }} -t $IMAGE:latest simulator/
+         docker push IMAGE:{{ github.sha }}
+         docker push $IMAGE:latest
+
+
+ build-spark:
+   needs: detect-changes
+   if: needs.detect-changes.outputs.spark == 'true'
+   runs-on: ubuntu-latest
+   permissions:
+     id-token: write
+     contents: read
+   steps:
+     - uses: actions/checkout@v4
+     - uses: google-github-actions/auth@v2
+       with:
+         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+     - uses: google-github-actions/setup-gcloud@v2
+     - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+     # NOTE: SparkApplication manifests pin the exact tag "3.5.1" (not
+     # "latest"), with imagePullPolicy: Always — so CI must overwrite
+     # that exact tag for new builds to actually take effect.
+     - run: |
+         IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark
+         docker build -t IMAGE:{{ github.sha }} -t $IMAGE:3.5.1 spark/
+         docker push IMAGE:{{ github.sha }}
+         docker push $IMAGE:3.5.1
+
+
+ build-dbt:
+   needs: detect-changes
+   if: needs.detect-changes.outputs.dbt == 'true'
+   runs-on: ubuntu-latest
+   permissions:
+     id-token: write
+     contents: read
+   steps:
+     - uses: actions/checkout@v4
+     - uses: google-github-actions/auth@v2
+       with:
+         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+     - uses: google-github-actions/setup-gcloud@v2
+     - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+     - run: |
+         IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/dbt
+         docker build -t IMAGE:{{ github.sha }} -t $IMAGE:latest dbt/
+         docker push IMAGE:{{ github.sha }}
+         docker push $IMAGE:latest
