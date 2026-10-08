@@ -58,7 +58,7 @@ jobs:
      - run: |
          IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/ingest-api
          docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest ingest-api/
-         docker push $IMAGE:{{ github.sha }}
+         docker push $IMAGE:${{ github.sha }}
          docker push $IMAGE:latest
 
 
@@ -83,7 +83,7 @@ jobs:
      - run: |
          IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/simulator/simulator
          docker build -t $IMAGE:{{ github.sha }} -t $IMAGE:latest simulator/
-         docker push $IMAGE:{{ github.sha }}
+         docker push $IMAGE:${{ github.sha }}
          docker push $IMAGE:latest
 
 
@@ -107,8 +107,8 @@ jobs:
      # that exact tag for new builds to actually take effect.
      - run: |
          IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/pyspark
-         docker build -t IMAGE:{{ github.sha }} -t $IMAGE:3.5.1 spark/
-         docker push $IMAGE:{{ github.sha }}
+         docker build -t IMAGE:${{ github.sha }} -t $IMAGE:3.5.1 spark/
+         docker push $IMAGE:${{ github.sha }}
          docker push $IMAGE:3.5.1
 
 
@@ -129,6 +129,6 @@ jobs:
      - run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
      - run: |
          IMAGE=europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/dbt
-         docker build -t $IMAGE:{{ github.sha }} -t $IMAGE:latest dbt/
-         docker push $IMAGE:{{ github.sha }}
+         docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest dbt/
+         docker push $IMAGE:${{ github.sha }}
          docker push $IMAGE:latest
