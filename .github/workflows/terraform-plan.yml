@@ -1,17 +1,14 @@
 name: Terraform Plan
 
-
 "on":
   push:
     branches: [main]
     paths:
       - "terraform/**"
 
-
 permissions:
   id-token: write
   contents: read
-
 
 jobs:
   detect-changes:
@@ -36,7 +33,6 @@ jobs:
             cloudsql:
               - 'terraform/cloudsql/**'
 
-
   plan-foundations:
     needs: detect-changes
     if: needs.detect-changes.outputs.foundations == 'true'
@@ -44,6 +40,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_github_owner: bassemessam1
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -57,14 +56,13 @@ jobs:
         continue-on-error: true
       - name: terraform init
         working-directory: terraform/foundations
-        run: terraform init
+        run: terraform init -input=false
       - name: terraform validate
         working-directory: terraform/foundations
         run: terraform validate
       - name: terraform plan
         working-directory: terraform/foundations
-        run: terraform plan -no-color
-
+        run: terraform plan -no-color -input=false
 
   plan-gke:
     needs: detect-changes
@@ -73,6 +71,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_github_owner: bassemessam1
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -86,14 +87,13 @@ jobs:
         continue-on-error: true
       - name: terraform init
         working-directory: terraform/gke
-        run: terraform init
+        run: terraform init -input=false
       - name: terraform validate
         working-directory: terraform/gke
         run: terraform validate
       - name: terraform plan
         working-directory: terraform/gke
-        run: terraform plan -no-color
-
+        run: terraform plan -no-color -input=false
 
   plan-lake:
     needs: detect-changes
@@ -102,6 +102,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_github_owner: bassemessam1
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -115,14 +118,13 @@ jobs:
         continue-on-error: true
       - name: terraform init
         working-directory: terraform/lake
-        run: terraform init
+        run: terraform init -input=false
       - name: terraform validate
         working-directory: terraform/lake
         run: terraform validate
       - name: terraform plan
         working-directory: terraform/lake
-        run: terraform plan -no-color
-
+        run: terraform plan -no-color -input=false
 
   plan-cloudsql:
     needs: detect-changes
@@ -131,6 +133,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_github_owner: bassemessam1
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -144,10 +149,10 @@ jobs:
         continue-on-error: true
       - name: terraform init
         working-directory: terraform/cloudsql
-        run: terraform init
+        run: terraform init -input=false
       - name: terraform validate
         working-directory: terraform/cloudsql
         run: terraform validate
       - name: terraform plan
         working-directory: terraform/cloudsql
-        run: terraform plan -no-color
+        run: terraform plan -no-color -input=false
