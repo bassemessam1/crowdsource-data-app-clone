@@ -1,45 +1,41 @@
 name: Terraform Apply (manual)
 
-
 "on":
- workflow_dispatch:
-   inputs:
-     module:
-       description: "Which terraform module to apply"
-       required: true
-       type: choice
-       options:
-         - foundations
-         - gke
-         - lake
-         - cloudsql
-
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Which terraform module to apply"
+        required: true
+        type: choice
+        options:
+          - foundations
+          - gke
+          - lake
+          - cloudsql
 
 permissions:
- id-token: write
- contents: read
-
+  id-token: write
+  contents: read
 
 jobs:
- apply:
-   runs-on: ubuntu-latest
-   # Optional: configure a GitHub Environment named "production" with a
-   # required-reviewer rule if you want a second manual approval click
-   # between triggering this and it actually running.
-   # environment: production
-   steps:
-     - uses: actions/checkout@v4
-     - uses: google-github-actions/auth@v2
-       with:
-         workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-         service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
-     - uses: hashicorp/setup-terraform@v3
-     - name: terraform init
-       working-directory: terraform/${{ inputs.module }}
-       run: terraform init
-     - name: terraform plan
-       working-directory: terraform/${{ inputs.module }}
-       run: terraform plan -no-color
-     - name: terraform apply
-       working-directory: terraform/${{ inputs.module }}
-       run: terraform apply -auto-approve
+  apply:
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_github_owner: bassemessam1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - name: terraform init
+        working-directory: terraform/${{ inputs.module }}
+        run: terraform init -input=false
+      - name: terraform plan
+        working-directory: terraform/${{ inputs.module }}
+        run: terraform plan -no-color -input=false
+      - name: terraform apply
+        working-directory: terraform/${{ inputs.module }}
+        run: terraform apply -auto-approve -input=false
