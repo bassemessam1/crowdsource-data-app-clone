@@ -70,6 +70,35 @@ triggerer:
   #     cpu: 200m
       # memory: 256Mi
 
+# ── Metrics (Phase 08) ────────────────────────────────────────────────────────
+# Chart automatically sets AIRFLOW__METRICS__STATSD_ON/HOST/PORT/PREFIX for
+# scheduler, webserver, and worker pods — no manual env vars needed.
+statsd:
+ enabled: true
+ resources:
+   requests:
+     cpu: 50m
+     memory: 64Mi
+ # Confirmed via `helm show values` that the chart's bundled default
+ # mapping has no rule for ti_finish/dag timing metrics — they were
+ # falling through to statsd_exporter's raw passthrough, baking
+ # dag_id/task_id into the metric name instead of real labels.
+ extraMappings:
+   - match: '^airflow\.ti_finish\.([^.]+)\.([^.]+)\.([^.]+)$'
+     match_type: regex
+     name: "airflow_ti_finish"
+     labels:
+       dag_id: "$1"
+       task_id: "$2"
+       state: "$3"
+   - match: '^airflow\.dag\.([^.]+)\.([^.]+)\.([^.]+)$'
+     match_type: regex
+     name: "airflow_dag_task_timing"
+     labels:
+       dag_id: "$1"
+       task_id: "$2"
+       metric: "$3"
+ 
 # ── Service accounts ──────────────────────────────────────────────────────────
 serviceAccount:
   create: false

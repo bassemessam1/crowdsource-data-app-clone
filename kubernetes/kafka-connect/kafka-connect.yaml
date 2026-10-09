@@ -21,13 +21,24 @@ spec:
         - name: kafka-connect
           # Custom image with GCS plugin pre-installed — no init container needed
           image: europe-west2-docker.pkg.dev/crowdsource-data-app-clone/crowdsource-data-app/kafka-connect-gcs:7.6.0
+          imagePullPolicy: Always
           ports:
             - containerPort: 8083
+              name: rest
+            - containerPort: 8080
+              name: tcp-prometheus
           volumeMounts:
             - name: gcs-credentials
               mountPath: /etc/gcs-credentials
               readOnly: true
+            - name: connect-metrics-config
+              mountPath: /etc/jmx-exporter
+              readOnly: true
           env:
+            # Phase 08 — JMX exporter javaagent (jar baked into image via
+            # Dockerfile; rule config supplied by the mounted ConfigMap above)
+            - name: KAFKA_OPTS
+              value: "-javaagent:/usr/share/java/jmx_prometheus_javaagent.jar=8080:/etc/jmx-exporter/connect-metrics-config.yml"
             - name: CONNECT_BOOTSTRAP_SERVERS
               value: "crowdsource-data-app-kafka-kafka-bootstrap:9092"
             - name: CONNECT_REST_PORT
@@ -95,6 +106,9 @@ spec:
         - name: gcs-credentials
           secret:
             secretName: gcs-credentials
+        - name: connect-metrics-config
+          configMap:
+            name: kafka-connect-metrics-config
 ---
 apiVersion: v1
 kind: Service
@@ -109,5 +123,8 @@ spec:
     - port: 8083
       targetPort: 8083
       name: rest
+    - port: 8080
+      targetPort: 8080
+      name: tcp-prometheus
   selector:
     app: kafka-connect

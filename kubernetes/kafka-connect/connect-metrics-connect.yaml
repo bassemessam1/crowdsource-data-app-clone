@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-connect-metrics-config
+  namespace: kafka
+data:
+  connect-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # Connector-level status (running/paused/failed/unassigned).
+      # String-valued JMX attribute — the exporter matches against the
+      # "name: value" textual form for non-numeric attributes, producing
+      # one series per (connector, status) with value fixed at 1. The
+      # currently-true status is the one with value 1; others simply
+      # don't appear as a series until that becomes their status.
+      - pattern: 'kafka.connect<type=connector-metrics, connector=(.+)><>connector-destroyed-task-count'
+        name: kafka_connect_connector_destroyed_task_count
+        type: GAUGE
+        labels:
+          connector: "$1"
+
+      - pattern: 'kafka.connect<type=connector-metrics, connector=(.+)><>status: (.+)'
+        name: kafka_connect_connector_status
+        value: 1
+        labels:
+          connector: "$1"
+          status: "$2"
+
+      # Task-level status — the one that actually caught us out repeatedly:
+      # a connector can show RUNNING while one of its tasks is FAILED.
+      - pattern: 'kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>status: (.+)'
+        name: kafka_connect_connector_task_status
+        value: 1
+        labels:
+          connector: "$1"
+          task: "$2"
+          status: "$3"
+
+      # Real consumer lag — this MBean genuinely exists here, unlike on the
+      # broker pods, since Connect's sink task embeds an actual consumer.
+      - pattern: 'kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+)><>records-lag-max'
+        name: kafka_connect_consumer_records_lag_max
+        type: GAUGE
+        labels:
+          client_id: "$1"
