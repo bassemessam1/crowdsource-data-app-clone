@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: airflow-statsd-metrics
+  namespace: airflow
+spec:
+  selector:
+    matchLabels:
+      component: statsd
+      release: airflow
+      tier: airflow
+  endpoints:
+    - port: statsd-scrape
+      path: /metrics
+      interval: 30s

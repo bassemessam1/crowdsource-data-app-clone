@@ -17,6 +17,10 @@
 #   - Spark Operator (Phase 03)
 #   - Bronze / Silver / Gold Spark jobs (Phase 03)
 #   - Airflow 2.9.2 with Cloud SQL Postgres (Phase 04)
+#   - dbt transform task runs automatically as part of daily_batch_pipeline
+#     (Phase 05) — no separate startup step needed: ksa-dbt comes from the
+#     same `terraform apply` as the rest of the gke module, and the task
+#     itself is pulled in via GitSync along with the rest of the DAG.
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -49,7 +53,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo ""
 echo -e "${BLUE}╔═════════════════════════════════════=============═════╗${NC}"
-echo -e "${BLUE}║    CROWDSOURCEDATAAPPCLUSTERSTARTUP                   ║${NC}"
+echo -e "${BLUE}║        CROWDSOURCE DATA APP CLUSTER STARTUP           ║${NC}"
 echo -e "${BLUE}╚═════════════════════════════════════=============═════╝${NC}"
 echo ""
 
@@ -247,6 +251,13 @@ if [ -f "$KAFKA_DIR/kafka-cluster.yaml" ]; then
     ok "Kafka topics applied"
   fi
 
+  # Phase 08 — PodMonitor for broker JMX metrics (kafka namespace is
+  # destroyed on teardown, so this needs reapplying each session)
+  if [ -f "$KAFKA_DIR/kafka-podmonitor.yaml" ]; then
+    kubectl apply -f "$KAFKA_DIR/kafka-podmonitor.yaml"
+    ok "Kafka PodMonitor applied"
+  fi
+
 else
   warn "No Kafka manifests found at $KAFKA_DIR — skipping"
 fi
@@ -301,7 +312,20 @@ if [ -f "$KC_MANIFEST" ]; then
   kubectl delete kafkaconnect --all -n kafka 2>/dev/null || true
   sleep 5
 
+  # Phase 08 — JMX exporter rules ConfigMap, must exist before the
+  # Deployment (referenced via volume mount)
+  if [ -f "$REPO_ROOT/kubernetes/kafka-connect/connect-metrics-config.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/connect-metrics-config.yaml"
+    ok "Kafka Connect metrics ConfigMap applied"
+  fi
+
   kubectl apply -f "$KC_MANIFEST"
+
+  # Phase 08 — PodMonitor for Connect's JMX metrics
+  if [ -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-podmonitor.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-podmonitor.yaml"
+    ok "Kafka Connect PodMonitor applied"
+  fi
 
   log "  Waiting for Kafka Connect (up to 10 minutes)..."
   kubectl wait deployment/kafka-connect \
@@ -314,11 +338,20 @@ if [ -f "$KC_MANIFEST" ]; then
   # Re-register the GCS Sink connector via REST API
   # Uses confluent.topic.bootstrap.servers and gcs.credentials.path
   # which are required by the Confluent Platform image
+  #
+  # NOTE: registration is done via a local port-forward + curl from the
+  # script's own host, NOT via `kubectl run --rm` with an ephemeral pod.
+  # The ephemeral-pod approach was tried first and proved unreliable —
+  # `kubectl run ... --rm` without `--attach`/`-i` does not reliably wait
+  # for the command inside the pod to actually execute before tearing the
+  # pod down, so the POST sometimes never reaches Kafka Connect at all
+  # even though the step reports success. Port-forwarding is the only
+  # method confirmed, twice, to actually deliver the registration.
   log "  Waiting for Kafka Connect REST API to accept connections..."
   REST_READY=false
   for i in $(seq 1 30); do
-    if kubectl run connect-probe-$i --image=curlimages/curl --namespace=kafka --restart=Never --rm -i \
-       -- curl -s -o /dev/null -w "%{http_code}" http://kafka-connect:8083/connectors 2>/dev/null | grep -q 200; then
+    if kubectl exec -n kafka deploy/kafka-connect -- \
+       curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/connectors 2>/dev/null | grep -q 200; then
       REST_READY=true
       ok "Kafka Connect REST API is up"
       break
@@ -329,18 +362,17 @@ if [ -f "$KC_MANIFEST" ]; then
     warn "Kafka Connect REST API never responded — connector registration will likely fail"
   fi
 
-  log "  Registering GCS Sink Connector..."
+  log "  Registering GCS Sink Connector (via port-forward)..."
 
-  kubectl run connector-restore \
-    --image=curlimages/curl \
-    --namespace=kafka \
-    --restart=Never \
-    --rm \
-    -- sh -c \
-    'curl -s -X POST http://kafka-connect:8083/connectors \
-      -H "Content-Type: application/json" \
-      -d @- << ENDJSON
-{
+  # Start a background port-forward, give it a moment to establish
+  kubectl port-forward svc/kafka-connect 8083:8083 -n kafka > /tmp/kc-portforward.log 2>&1 &
+  KC_PF_PID=$!
+  sleep 5
+
+  CONNECTOR_REGISTERED=false
+  if curl -s -X POST http://localhost:8083/connectors \
+    -H "Content-Type: application/json" \
+    -d '{
   "name": "gcs-sink-raw-measurements",
   "config": {
     "connector.class": "io.confluent.connect.gcs.GcsSinkConnector",
@@ -354,7 +386,7 @@ if [ -f "$KC_MANIFEST" ]; then
     "format.class": "io.confluent.connect.gcs.format.avro.AvroFormat",
     "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
     "partition.duration.ms": "3600000",
-    "path.format": "year=YYYY/month=MM/day=dd/hour=HH",
+    "path.format": "'\''year'\''=YYYY/'\''month'\''=MM/'\''day'\''=dd/'\''hour'\''=HH",
     "locale": "en_GB",
     "timezone": "UTC",
     "timestamp.extractor": "RecordField",
@@ -370,11 +402,26 @@ if [ -f "$KC_MANIFEST" ]; then
     "confluent.topic.replication.factor": "3",
     "gcs.credentials.path": "/etc/gcs-credentials/key.json"
   }
-}
-ENDJSON
-' 2>/dev/null && \
-    ok "GCS Sink Connector registered" || \
-    warn "Connector registration failed — register manually after startup"
+}' 2>/dev/null | grep -q '"name"'; then
+    CONNECTOR_REGISTERED=true
+  fi
+
+  # Verify it actually reached RUNNING state, not just that the POST was accepted
+  if [ "$CONNECTOR_REGISTERED" = true ]; then
+    sleep 5
+    CONNECTOR_STATE=$(curl -s http://localhost:8083/connectors/gcs-sink-raw-measurements/status 2>/dev/null | \
+      grep -o '"state":"[A-Z]*"' | head -1)
+    if echo "$CONNECTOR_STATE" | grep -q RUNNING; then
+      ok "GCS Sink Connector registered and RUNNING"
+    else
+      warn "Connector registered but state is: $CONNECTOR_STATE — check: kubectl logs -n kafka -l app=kafka-connect"
+    fi
+  else
+    warn "Connector registration failed — register manually: kubectl port-forward svc/kafka-connect 8083:8083 -n kafka"
+  fi
+
+  # Clean up the port-forward
+  kill $KC_PF_PID 2>/dev/null || true
 
 else
   warn "No Kafka Connect manifest found — skipping"
@@ -508,6 +555,14 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     ok "Airflow webserver ready" || \
     warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
 
+  # Phase 08 — StatsD ServiceMonitor (airflow namespace is destroyed on
+  # teardown, so this needs reapplying each session, same as the Kafka
+  # PodMonitors)
+  if [ -f "$REPO_ROOT/kubernetes/airflow/airflow-statsd-servicemonitor.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/airflow/airflow-statsd-servicemonitor.yaml"
+    ok "Airflow StatsD ServiceMonitor applied"
+  fi
+
   # Clear any stale queued DAG runs left from previous sessions
   # These accumulate because hourly schedule tries to backfill missed runs
   log "  Clearing stale DAG runs from previous sessions..."
@@ -554,7 +609,7 @@ kubectl get pods -A \
   --field-selector=status.phase!=Running \
   --field-selector=status.phase!=Succeeded \
   2>/dev/null | grep -v "^NAMESPACE" || \
-  echo -e "  GREENAllpodshealthy{NC}"
+  echo -e "  ${GREEN}All pods healthy${NC}"
 
 echo ""
 echo "  Helm releases:"
@@ -563,7 +618,7 @@ helm list -A --output table 2>/dev/null | \
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║     STARTUPCOMPLETE                      ║${NC}"
+echo -e "${GREEN}║         STARTUP COMPLETE                 ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${GREEN}✓${NC}  GKE cluster running"
@@ -575,21 +630,24 @@ echo -e "  ${GREEN}✓${NC}  Kafka Connect + GCS Sink running"
 echo -e "  ${GREEN}✓${NC}  Ingest API running (static IP: 34.89.87.57)"
 echo -e "  ${GREEN}✓${NC}  Measurement Simulator running"
 echo -e "  ${GREEN}✓${NC}  Spark Bronze / Silver / Gold jobs run"
-echo -e "  ${GREEN}✓${NC}  Airflow running (Cloud SQL Postgres)"
+echo -e "  ${GREEN}✓${NC}  Airflow running (built-in Postgres)"
 echo ""
-echo -e "  YELLOWAccessGrafana:${NC}"
+echo -e "  ${YELLOW}Access Grafana:${NC}"
 echo -e "  kubectl port-forward svc/\$(kubectl get svc -n monitoring --selector=app.kubernetes.io/name=grafana -o name | head -1 | cut -d/ -f2) 3000:80 -n monitoring"
 echo ""
-echo -e "  YELLOWTestIngestAPI:${NC}"
+echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
-echo -e "  YELLOWCheckBigQuery:${NC}"
+echo -e "  ${YELLOW}Check BigQuery (gold):${NC}"
 echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
 echo ""
-echo -e "  YELLOWAccessAirflowUI:${NC}"
+echo -e "  ${YELLOW}Check BigQuery (dbt marts):${NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.operator_rankings ORDER BY metric_date DESC LIMIT 10'"
+echo ""
+echo -e "  ${YELLOW}Access Airflow UI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
 echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
 echo ""
-echo -e "  YELLOWWhendonefortheday:${NC}"
+echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
 echo ""

@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: kafka-broker-metrics
+  namespace: kafka
+spec:
+  # No namespaceSelector — defaults to the PodMonitor's own namespace (kafka),
+  # which is where the broker pods actually live.
+  selector:
+    matchLabels:
+      strimzi.io/cluster: crowdsource-data-app-kafka
+      strimzi.io/kind: Kafka
+  podMetricsEndpoints:
+    - port: tcp-prometheus   # Strimzi's standard name for the JMX exporter port
+      path: /metrics
+      interval: 30s
