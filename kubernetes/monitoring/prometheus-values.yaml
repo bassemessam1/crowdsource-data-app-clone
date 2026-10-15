@@ -32,6 +32,64 @@ alertmanager:
           resources:
             requests:
               storage: 2Gi
+    # Mounts the manually-created alertmanager-slack-webhook Secret at
+    # /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+    secrets:
+      - alertmanager-slack-webhook
+  # Overrides the chart's default config, which routes every alert to a
+  # 'null' receiver (i.e. nowhere). Based on the chart's own default
+  # structure (inhibit_rules, Watchdog route) — just pointing the default
+  # route at our Slack receiver instead of 'null'.
+  config:
+    global:
+      resolve_timeout: 5m
+    inhibit_rules:
+      - source_matchers:
+          - 'severity = critical'
+        target_matchers:
+          - 'severity =~ warning|info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+      - source_matchers:
+          - 'severity = warning'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+      - source_matchers:
+          - 'alertname = InfoInhibitor'
+        target_matchers:
+          - 'severity = info'
+        equal:
+          - 'namespace'
+          - 'alertname'
+      - target_matchers:
+          - 'alertname = InfoInhibitor'
+    route:
+      group_by: ['namespace']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: 'null'
+      routes:
+        - receiver: 'null'
+          matchers:
+            - alertname = "Watchdog"
+        - receivers: 'slack-notifications'
+          matchers:
+            - project ="data-pipeline"
+          continue: false
+    receivers:
+      - name: 'null'
+      - name: 'slack-notifications'
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+            channel: '#alerts'
+            send_resolved: true
+    templates:
+      - '/etc/alertmanager/config/*.tmpl'
 
 # ── Prometheus Operator ───────────────────────────────────────────────────────
 # This is the key fix — override the kubelet-service argument
