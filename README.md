@@ -1,4 +1,4 @@
-# Crowdsource Data App — GCP Clone
+# Crowdsourced Data App — GCP Clone
 
 A project that clones crowodsourced data application's production data engineering architecture on GCP: a full pipeline from simulated device measurements through to a BI dashboard, built with the same technologies a real network-experience data platform would use — Kafka, Spark, Airflow, dbt, Looker Studio, Terraform, GitHub Actions, and Prometheus/Grafana.
 
