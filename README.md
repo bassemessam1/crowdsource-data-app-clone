@@ -60,7 +60,7 @@ This single script recreates the entire cluster: GKE, cert-manager, External Sec
 ```bash
 kubectl create secret generic alertmanager-slack-webhook \
   --namespace monitoring \
-  --from-literal=url='https://datastudio.google.com/reporting/4e9ace7b-6d25-49e9-a7ad-87196f255a24'
+  --from-literal=url='<slack-webhook-url>'
 ```
 Without this, Alertmanager starts fine but has nothing to read for its Slack receiver.
 
@@ -163,7 +163,7 @@ crowdsource-data-app-clone/
 | Ingest API | `curl http://34.89.87.57/health` |
 | BigQuery (gold) | `bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_gold.operator_metrics LIMIT 10'` |
 | BigQuery (marts) | `bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.bi_operator_daily LIMIT 10'` |
-| Looker Studio dashboard | *(link kept separately -- add here when ready)* |
+| Looker Studio dashboard | `https://datastudio.google.com/reporting/4e9ace7b-6d25-49e9-a7ad-87196f255a24` |
 
 ---
 
