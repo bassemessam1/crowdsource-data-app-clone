@@ -1,0 +1,52 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: pipeline-alerts
+  namespace: monitoring
+  labels:
+    # Defensive label: this chart's ruleSelectorNilUsesHelmValues default
+    # (unlike the podMonitor/serviceMonitor ones, which this project
+    # explicitly set to false) is restrictive — only PrometheusRule objects
+    # matching the Helm release are picked up. This label is required if
+    # that's true, and harmless if it isn't.
+    release: kube-prometheus
+spec:
+  groups:
+    - name: kafka-connect
+      rules:
+        - alert: KafkaConnectTaskFailed
+          expr: kafka_connect_connector_task_status{status="failed"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kafka Connect task {{ $labels.task }} on connector {{ $labels.connector }} is FAILED"
+            description: >
+              Task {{ $labels.task }} of connector {{ $labels.connector }} has been
+              in FAILED state for at least 2 minutes. The connector itself may still
+              show RUNNING — check task status directly via the Connect REST API.
+
+        - alert: KafkaConnectConsumerLagHigh
+          expr: kafka_connect_consumer_records_lag_max > 5000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka Connect consumer lag is high for {{ $labels.client_id }}"
+            description: >
+              Consumer {{ $labels.client_id }} has a records-lag-max of {{ $value }},
+              sustained for at least 10 minutes. The sink connector may be falling
+              behind or stalled — check landing bucket freshness.
+
+    - name: airflow
+      rules:
+        - alert: AirflowTaskFailed
+          expr: increase(airflow_task_finish_detail{state="failed"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Airflow task {{ $labels.task_id }} failed in DAG {{ $labels.dag_id }}"
+            description: >
+              Task {{ $labels.task_id }} in DAG {{ $labels.dag_id }} has recorded
+              at least one failure in the last 10 minutes.
