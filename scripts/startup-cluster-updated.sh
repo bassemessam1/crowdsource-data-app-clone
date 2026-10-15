@@ -16,12 +16,11 @@
 #   - Measurement Simulator (Phase 02)
 #   - Spark Operator (Phase 03)
 #   - Bronze / Silver / Gold Spark jobs (Phase 03)
-#   - Airflow 2.9.2 with built-in Postgres (Phase 04)
-#   - dbt transform task runs automatically as part of 
-#     daily_batch_pipeline (phase 05) - no seperate step 
-#     needed: ksa-dbt comes from the same `terraform apply` 
-#     as the rest of gke module, and the task itself is pulled in 
-#     via GitSync along with the rest of the DAG 
+#   - Airflow 2.9.2 with Cloud SQL Postgres (Phase 04)
+#   - dbt transform task runs automatically as part of daily_batch_pipeline
+#     (Phase 05) — no separate startup step needed: ksa-dbt comes from the
+#     same `terraform apply` as the rest of the gke module, and the task
+#     itself is pulled in via GitSync along with the rest of the DAG.
 #
 # Prerequisites:
 #   - gcloud authenticated (gcloud auth login)
@@ -189,6 +188,18 @@ helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stac
   --wait
 
 ok "Prometheus + Grafana installed"
+
+# Phase 08 — alerting rules (monitoring namespace is destroyed on teardown,
+# so this needs reapplying each session)
+if [ -f "$REPO_ROOT/kubernetes/monitoring/pipeline-alerts.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/monitoring/pipeline-alerts.yaml"
+  ok "Pipeline alerting rules applied"
+fi
+
+if [ -f "$REPO_ROOT/kubernetes/monitoring/pipeline-health-dashboard-configmap.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/monitoring/pipeline-health-dashboard-configmap.yaml"
+  ok "Pipeline Health Grafana dashboard applied"
+fi
 echo ""
 
 # ── Step 8: Install Spark Operator ───────────────────────────────────────────
@@ -252,6 +263,13 @@ if [ -f "$KAFKA_DIR/kafka-cluster.yaml" ]; then
     ok "Kafka topics applied"
   fi
 
+  # Phase 08 — PodMonitor for broker JMX metrics (kafka namespace is
+  # destroyed on teardown, so this needs reapplying each session)
+  if [ -f "$KAFKA_DIR/kafka-podmonitor.yaml" ]; then
+    kubectl apply -f "$KAFKA_DIR/kafka-podmonitor.yaml"
+    ok "Kafka PodMonitor applied"
+  fi
+
 else
   warn "No Kafka manifests found at $KAFKA_DIR — skipping"
 fi
@@ -306,7 +324,20 @@ if [ -f "$KC_MANIFEST" ]; then
   kubectl delete kafkaconnect --all -n kafka 2>/dev/null || true
   sleep 5
 
+  # Phase 08 — JMX exporter rules ConfigMap, must exist before the
+  # Deployment (referenced via volume mount)
+  if [ -f "$REPO_ROOT/kubernetes/kafka-connect/connect-metrics-config.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/connect-metrics-config.yaml"
+    ok "Kafka Connect metrics ConfigMap applied"
+  fi
+
   kubectl apply -f "$KC_MANIFEST"
+
+  # Phase 08 — PodMonitor for Connect's JMX metrics
+  if [ -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-podmonitor.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/kafka-connect/kafka-connect-podmonitor.yaml"
+    ok "Kafka Connect PodMonitor applied"
+  fi
 
   log "  Waiting for Kafka Connect (up to 10 minutes)..."
   kubectl wait deployment/kafka-connect \
@@ -319,7 +350,15 @@ if [ -f "$KC_MANIFEST" ]; then
   # Re-register the GCS Sink connector via REST API
   # Uses confluent.topic.bootstrap.servers and gcs.credentials.path
   # which are required by the Confluent Platform image
-
+  #
+  # NOTE: registration is done via a local port-forward + curl from the
+  # script's own host, NOT via `kubectl run --rm` with an ephemeral pod.
+  # The ephemeral-pod approach was tried first and proved unreliable —
+  # `kubectl run ... --rm` without `--attach`/`-i` does not reliably wait
+  # for the command inside the pod to actually execute before tearing the
+  # pod down, so the POST sometimes never reaches Kafka Connect at all
+  # even though the step reports success. Port-forwarding is the only
+  # method confirmed, twice, to actually deliver the registration.
   log "  Waiting for Kafka Connect REST API to accept connections..."
   REST_READY=false
   for i in $(seq 1 30); do
@@ -399,7 +438,6 @@ if [ -f "$KC_MANIFEST" ]; then
 else
   warn "No Kafka Connect manifest found — skipping"
 fi
-
 echo ""
 
 # ── Phase 02: Ingest API ──────────────────────────────────────────────────────
@@ -529,6 +567,14 @@ if [ -f "$AIRFLOW_VALUES" ]; then
     ok "Airflow webserver ready" || \
     warn "Airflow webserver not ready — check: kubectl get pods -n airflow"
 
+  # Phase 08 — StatsD ServiceMonitor (airflow namespace is destroyed on
+  # teardown, so this needs reapplying each session, same as the Kafka
+  # PodMonitors)
+  if [ -f "$REPO_ROOT/kubernetes/airflow/airflow-statsd-servicemonitor.yaml" ]; then
+    kubectl apply -f "$REPO_ROOT/kubernetes/airflow/airflow-statsd-servicemonitor.yaml"
+    ok "Airflow StatsD ServiceMonitor applied"
+  fi
+
   # Clear any stale queued DAG runs left from previous sessions
   # These accumulate because hourly schedule tries to backfill missed runs
   log "  Clearing stale DAG runs from previous sessions..."
@@ -559,7 +605,6 @@ with create_session() as session:
       airflow dags unpause daily_batch_pipeline 2>/dev/null && \
       ok "daily_batch_pipeline unpaused" || \
       warn "Could not unpause DAG — unpause manually via Airflow UI"
-
   fi
 else
   warn "No Airflow values file found at $AIRFLOW_VALUES — skipping"
@@ -605,18 +650,15 @@ echo ""
 echo -e "  ${YELLOW}Test Ingest API:${NC}"
 echo -e "  curl -s http://34.89.87.57/health"
 echo ""
-echo -e "  ${YELLOW}Check BigQuery:${NC}"
-echo -e "  bq query --nouse_legacy_sql 'SELECT operator_name, COUNT(*) as rows FROM opensignal_gold.operator_metrics GROUP BY 1'"
+echo -e "  ${YELLOW}Check BigQuery (gold):${NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
+echo ""
+echo -e "  ${YELLOW}Check BigQuery (dbt marts):${NC}"
+echo -e "  bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.operator_rankings ORDER BY metric_date DESC LIMIT 10'"
 echo ""
 echo -e "  ${YELLOW}Access Airflow UI:${NC}"
 echo -e "  kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow"
 echo -e "  Open: http://localhost:8080  |  Login: admin / crowdsource-dev-2026"
-echo ""
-echo -e "  YELLOWCheckBigQuery(gold):{NC}"
-echo -e "  bq query --use_legacy_sql=false 'SELECT operator_name, COUNT(*) as rows FROM crowdsource_data_app_gold.operator_metrics GROUP BY 1'"
-echo ""
-echo -e "  YELLOWCheckBigQuery(dbtmarts):{NC}"
-echo -e "  bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.operator_rankings ORDER BY metric_date DESC LIMIT 10'"
 echo ""
 echo -e "  ${YELLOW}When done for the day:${NC}"
 echo -e "  bash scripts/teardown-cluster.sh"
