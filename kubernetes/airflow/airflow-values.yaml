@@ -58,6 +58,14 @@ scheduler:
     limits:
       cpu: 500m
       memory: 1Gi
+  startupProbe:
+    timeoutSeconds: 30
+    failureThreshold: 30
+    periodSeconds: 10
+  livenessProbe:
+    timeoutSeconds: 30
+    failureThreshold: 10
+    periodSeconds: 30
 
 # ── Triggerer ─────────────────────────────────────────────────────────────────
 triggerer:
@@ -84,7 +92,7 @@ statsd:
  # falling through to statsd_exporter's raw passthrough, baking
  # dag_id/task_id into the metric name instead of real labels.
  extraMappings:
-   - match: '^airflow\.ti_finish\.([^.]+)\.([^.]+)\.([^.]+)$'
+   - match: '^airflow\.ti\.finish\.([^.]+)\.([^.]+)\.([^.]+)$'
      match_type: regex
      name: "airflow_task_finish_detail"
      labels:
