@@ -86,7 +86,7 @@ statsd:
  extraMappings:
    - match: '^airflow\.ti_finish\.([^.]+)\.([^.]+)\.([^.]+)$'
      match_type: regex
-     name: "airflow_ti_finish"
+     name: "airflow_task_finish_detail"
      labels:
        dag_id: "$1"
        task_id: "$2"
