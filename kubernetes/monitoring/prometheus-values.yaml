@@ -64,7 +64,6 @@ alertmanager:
           - 'severity = info'
         equal:
           - 'namespace'
-          - 'alertname'
       - target_matchers:
           - 'alertname = InfoInhibitor'
     route:
@@ -77,9 +76,14 @@ alertmanager:
         - receiver: 'null'
           matchers:
             - alertname = "Watchdog"
-        - receivers: 'slack-notifications'
+        # Only our own pipeline alerts (tagged project=data-pipeline in
+        # pipeline-alerts.yaml) go to Slack — everything else the chart
+        # ships by default (KubeMemoryOvercommit, KubePodNotReady, etc.)
+        # stays routed to 'null' to avoid flooding the channel with
+        # generic cluster-health noise unrelated to the data pipeline.
+        - receiver: 'slack-notifications'
           matchers:
-            - project ="data-pipeline"
+            - project = "data-pipeline"
           continue: false
     receivers:
       - name: 'null'
