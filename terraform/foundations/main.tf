@@ -42,7 +42,7 @@ resource "google_project" "project" {
   }
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
     ignore_changes = [billing_account]
   }
 }

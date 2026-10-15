@@ -188,6 +188,18 @@ helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stac
   --wait
 
 ok "Prometheus + Grafana installed"
+
+# Phase 08 — alerting rules (monitoring namespace is destroyed on teardown,
+# so this needs reapplying each session)
+if [ -f "$REPO_ROOT/kubernetes/monitoring/pipeline-alerts.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/monitoring/pipeline-alerts.yaml"
+  ok "Pipeline alerting rules applied"
+fi
+
+if [ -f "$REPO_ROOT/kubernetes/monitoring/pipeline-health-dashboard-configmap.yaml" ]; then
+  kubectl apply -f "$REPO_ROOT/kubernetes/monitoring/pipeline-health-dashboard-configmap.yaml"
+  ok "Pipeline Health Grafana dashboard applied"
+fi
 echo ""
 
 # ── Step 8: Install Spark Operator ───────────────────────────────────────────
