@@ -131,6 +131,7 @@ def _submit_and_wait(name, job_file, driver_mem, exec_mem, extra_conf=None):
 
 
 def delete_all_jobs():
+    raise Exception("TEST: intentional failure for monitoring test")
     from kubernetes import client, config
     config.load_incluster_config()
     api = client.CustomObjectsApi()
