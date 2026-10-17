@@ -113,7 +113,7 @@ Three workflows in `.github/workflows/`, authenticated via the WIF pool from Pha
 
 ### Phase 08 — Monitoring & Alerting
 - **Metrics:** a `PodMonitor` for Kafka brokers (JMX exporter, already configured by Strimzi), a hand-added JMX exporter for Kafka Connect (connector/task status, real consumer lag — Connect runs as a plain Deployment, so this needed a custom Dockerfile layer, not a Strimzi CRD feature), and Airflow's StatsD exporter with custom `extraMappings` to turn dag/task-ID-baked metric names into proper Prometheus labels.
-- **Alerting:** three `PrometheusRule`s — Kafka Connect task failure, sustained consumer lag, and Airflow task failure — routed to Slack via Alertmanager, scoped specifically to a `project: data-pipeline` label so the chart's own generic cluster-health alerts (`KubeMemoryOvercommit`, etc.) don't flood the channel.
+- **Alerting:** three `PrometheusRules`: Kafka Connect task failure, sustained consumer lag, and Airflow task failure — routed to Slack via Alertmanager, scoped specifically to a `project: data-pipeline` label so the chart's own generic cluster-health alerts (`KubeMemoryOvercommit`, etc.) don't flood the channel.
 - **Dashboard:** a "Pipeline Health" Grafana dashboard (delivered as a labelled ConfigMap the chart's sidecar auto-discovers), covering Airflow task outcomes, Kafka Connect task status, consumer lag, executor load, and broker request rate.
 
 **Deliberately out of scope:** SparkApplication failure alerting — Spark Operator was never installed with metrics enabled, so there's no Prometheus signal for Spark job failures specifically (Airflow task failure still catches this indirectly, since a failed Spark job fails its Airflow task).
@@ -127,8 +127,10 @@ Three workflows in `.github/workflows/`, authenticated via the WIF pool from Pha
 ```
 crowdsource-data-app-clone/
 ├── airflow/dags/                    # Synced live into Airflow via GitSync
-├── dbt/                             # dbt project -- containerized separately
-├── ingest-api/                      # FastAPI service
+├── dbt/
+    └── models/                      # dbt project -- containerized separately
+        ├── marts/
+        └── staging/                                
 ├── simulator/                       # Measurement simulator
 ├── spark/jobs/                      # bronze/silver/gold PySpark jobs
 ├── kubernetes/
@@ -160,9 +162,8 @@ crowdsource-data-app-clone/
 | Airflow UI | `kubectl port-forward svc/airflow-webserver 8080:8080 -n airflow` -> `admin` / `crowdsource-dev-2026` |
 | Grafana | `kubectl port-forward svc/kube-prometheus-grafana 3000:80 -n monitoring` -> `admin` / `crowdsource-dev-2026` |
 | Prometheus | `kubectl port-forward svc/kube-prometheus-kube-prome-prometheus 9090:9090 -n monitoring` |
-| Ingest API | `curl http://34.89.87.57/health` |
-| BigQuery (gold) | `bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_gold.operator_metrics LIMIT 10'` |
-| BigQuery (marts) | `bq query --use_legacy_sql=false 'SELECT * FROM crowdsource_data_app_marts.bi_operator_daily LIMIT 10'` |
+| BigQuery (gold) | `bq query 'SELECT * FROM crowdsource_data_app_gold.operator_metrics LIMIT 10'` |
+| BigQuery (marts) | `bq query 'SELECT * FROM crowdsource_data_app_marts.bi_operator_daily LIMIT 10'` |
 | Looker Studio dashboard | `https://datastudio.google.com/reporting/4e9ace7b-6d25-49e9-a7ad-87196f255a24` |
 
 ---
